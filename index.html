@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IPL Mega Auction Simulator 2025</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Add FontAwesome for icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Add Socket.io Client for real-time multiplayer coordination -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+
+  <!-- Broadcast Header -->
+  <header>
+    <div class="logo-container">
+      <div class="logo-badge">IPL</div>
+      <h1>MEGA AUCTION SIMULATOR <span style="color: var(--accent-gold); font-size: 0.9rem; font-weight: 800; font-family: 'Space Grotesk'">2025</span></h1>
+    </div>
+    <div class="header-controls">
+      <button class="btn" id="voice-toggle-btn" title="Toggle Announcer Voice" style="padding: 0.5rem 0.8rem;">
+        <i class="fa-solid fa-microphone" style="color: var(--accent-gold);"></i> Voice
+      </button>
+      <button class="btn btn-danger" id="reset-auction-btn" style="display: none;"><i class="fa-solid fa-rotate-left"></i> Reset Simulator</button>
+      <div class="logo-badge" style="background: rgba(255,255,255,0.05); color: #fff; font-size: 0.9rem; font-weight: 600; display: none;" id="status-phase-indicator">RETENTION PHASE</div>
+    </div>
+  </header>
+
+  <!-- Landing / Configuration Screen -->
+  <div class="screen active" id="landing-screen">
+    <div class="setup-container">
+      <div class="setup-info">
+        <h2>EXPERIENCE THE DRAMA OF THE MEGA AUCTION</h2>
+        <p>Step into the shoes of an IPL franchise owner. Manage a ₹120 Crore purse, lock in strategic retentions, navigate the high-stakes Right to Match (RTM) cards, and outbid rivals in real-time AI simulation. Built exactly on the official IPL 2025 rules.</p>
+        
+        <div class="features-list">
+          <div class="feature-item">
+            <span class="feature-item-title"><i class="fa-solid fa-indian-rupee-sign" style="color: var(--accent-gold);"></i> ₹120 Cr Purse</span>
+            <span class="feature-item-desc">Starts with ₹120 Crore budget. Capped & uncapped player retentions automatically deduct from your starting purse.</span>
+          </div>
+          <div class="feature-item">
+            <span class="feature-item-title"><i class="fa-solid fa-copy" style="color: var(--accent-gold);"></i> Right To Match (RTM)</span>
+            <span class="feature-item-desc">RTM cards allow franchises to match the final bid and retain their former stars instantly during the live auction.</span>
+          </div>
+          <div class="feature-item">
+            <span class="feature-item-title"><i class="fa-solid fa-users" style="color: var(--accent-gold);"></i> Squad Constraints</span>
+            <span class="feature-item-desc">Build a squad of 18-25 players, with a maximum of 8 overseas players. Formulate a valid XI with at least 7 Indian players.</span>
+          </div>
+          <div class="feature-item">
+            <span class="feature-item-title"><i class="fa-solid fa-robot" style="color: var(--accent-gold);"></i> Dynamic AI Bidding</span>
+            <span class="feature-item-desc">Opponent franchises dynamically bid based on realistic value calculations, role needs, and remaining purse.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setup-form-card">
+        <div class="hero-banner-container">
+          <img class="hero-banner" src="ipl_auction_banner.png" alt="IPL Mega Auction Banner">
+        </div>
+        <h3 style="font-family: 'Space Grotesk', sans-serif; letter-spacing: 0.5px;">CONSOLIDATE YOUR FRANCHISE</h3>
+        
+        <!-- User Name Input -->
+        <div class="form-group">
+          <label for="welcome-name-input" style="font-weight: 700; color: var(--text-secondary);">Your Name</label>
+          <input type="text" id="welcome-name-input" class="select-control" placeholder="Enter owner name..." value="Franchise Owner" style="background: rgba(0,0,0,0.3); border-color: var(--border-color);">
+        </div>
+
+        <!-- Franchise Select Grid -->
+        <div class="form-group">
+          <label style="font-weight: 700; color: var(--text-secondary); margin-bottom: 0.8rem;">Select Franchise to Control</label>
+          <div class="team-logo-grid" id="team-logo-grid">
+            <!-- Rendered dynamically in app.js -->
+          </div>
+          <input type="hidden" id="user-team-select" value="3">
+        </div>
+
+        <!-- Bidding Time Limit Per Player -->
+        <div class="form-group" id="timer-limit-group">
+          <label for="timer-limit-select" style="font-weight: 700; color: var(--text-secondary);">Bidding Time Limit Per Player</label>
+          <select id="timer-limit-select" class="select-control" style="background: rgba(0,0,0,0.3);">
+            <option value="5">5 Seconds</option>
+            <option value="7">7 Seconds</option>
+            <option value="10">10 Seconds</option>
+            <option value="15" selected>15 Seconds</option>
+          </select>
+        </div>
+
+        <!-- Room Privacy (Public vs Private) -->
+        <div class="form-group">
+          <label style="font-weight: 700; color: var(--text-secondary); margin-bottom: 0.5rem;">Room Access Type</label>
+          <div style="display: flex; gap: 1.5rem; align-items: center; background: rgba(0,0,0,0.3); padding: 0.8rem 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
+            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin: 0; color: #fff;">
+              <input type="radio" name="room-privacy" value="public" checked style="accent-color: var(--accent-gold);">
+              <i class="fa-solid fa-globe" style="color: var(--accent-gold);"></i> Public Room
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin: 0; color: #fff;">
+              <input type="radio" name="room-privacy" value="private" style="accent-color: var(--accent-gold);">
+              <i class="fa-solid fa-lock" style="color: var(--accent-gold);"></i> Private (PIN required)
+            </label>
+          </div>
+        </div>
+
+        <!-- Local and Room Creation Actions -->
+        <div style="display: flex; gap: 1rem; margin-top: 1.5rem; flex-wrap: wrap;">
+          <button class="btn btn-primary" id="start-retention-btn" style="flex: 1.2; padding: 0.9rem 1.2rem; font-size: 1rem;">
+            <i class="fa-solid fa-gavel"></i> Start IPL Mega Auction
+          </button>
+          <button class="btn" id="create-room-btn" style="flex: 1; padding: 0.9rem 1.2rem; font-size: 1rem; border-color: var(--accent-gold); color: var(--accent-gold); background: rgba(212,175,55,0.04);">
+            <i class="fa-solid fa-people-group"></i> Create a Room
+          </button>
+        </div>
+
+        <!-- Invite Panel (For guests who clicked room URL link) -->
+        <div id="guest-invite-panel" style="display: none; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 1.2rem; border-radius: 12px; margin-top: 1.5rem; border-left: 4px solid var(--accent-gold);">
+          <h4 style="font-size: 0.95rem; color: var(--accent-gold); margin-bottom: 0.5rem; font-family: Space Grotesk; letter-spacing: 0.5px;">JOIN ROOM INVITATION</h4>
+          <p id="invite-lobby-text" style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">Lobby Room: <strong style="font-family: monospace; color: #fff;">-</strong></p>
+          
+          <!-- Guest PIN input for private rooms -->
+          <div class="form-group" id="guest-pin-group" style="display: none; margin-bottom: 1rem;">
+            <label for="guest-pin-input" style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">Room PIN (Required for Private Rooms)</label>
+            <input type="text" id="guest-pin-input" class="select-control" placeholder="Enter 4-digit PIN..." maxlength="4" style="background: rgba(0,0,0,0.3); border-color: var(--border-color); font-family: monospace; font-size: 1.1rem; letter-spacing: 2px; text-align: center;">
+          </div>
+
+          <button class="btn btn-primary" id="join-lobby-btn" style="width: 100%; padding: 0.8rem; font-size: 1rem;">
+            <i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room
+          </button>
+        </div>
+
+        <!-- Multiplayer Lobby Status Panel (For Host/Guest connected) -->
+        <div id="lobby-status-container" style="display: none; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 1.2rem; border-radius: 12px; margin-top: 1.5rem; border-left: 4px solid var(--accent-gold);">
+          <h4 style="font-size: 0.95rem; color: var(--accent-gold); margin-bottom: 0.8rem; font-family: Space Grotesk; letter-spacing: 0.5px;">LOBBY DETAILS</h4>
+
+          <!-- Network mode selector -->
+          <div id="network-guide" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.8rem; margin-bottom: 1rem; font-size: 0.82rem;">
+            <div style="font-weight: 700; color: #fff; margin-bottom: 0.5rem;"><i class="fa-solid fa-network-wired" style="color:var(--accent-gold)"></i> How to share this room:</div>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.6rem;">
+              <button class="filter-btn active" id="net-lan-btn" onclick="switchNetMode('lan')">📶 Same WiFi (LAN)</button>
+              <button class="filter-btn" id="net-tunnel-btn" onclick="switchNetMode('tunnel')">🌐 Internet (Tunnel)</button>
+            </div>
+            <div id="net-lan-info" style="color: var(--text-secondary); line-height:1.5;">
+              ✅ <strong style="color:#fff">Same WiFi:</strong> Share the link below. Both you and your friends must be on the <strong style="color:var(--accent-gold)">same WiFi network</strong>. The link uses your LAN IP automatically.
+            </div>
+            <div id="net-tunnel-info" style="display:none; color: var(--text-secondary); line-height:1.5;">
+              🌐 <strong style="color:#fff">Internet Play:</strong> Open a new terminal and run:<br>
+              <code style="display:block; background:rgba(0,0,0,0.5); padding:0.4rem 0.6rem; border-radius:4px; margin:0.4rem 0; font-family:monospace; color:var(--accent-gold)">npx localtunnel --port 3000</code>
+              Copy the <strong>https://...</strong> URL it gives you, paste it below, then share that link.
+              <div style="margin-top:0.5rem; display:flex; gap:0.4rem;">
+                <input type="text" id="tunnel-url-input" class="select-control" placeholder="Paste tunnel URL here e.g. https://abc.loca.lt" style="font-size:0.8rem; background:rgba(0,0,0,0.4);">
+                <button class="btn btn-primary" style="padding:0 0.8rem; font-size:0.8rem; white-space:nowrap;" onclick="applyTunnelUrl()">Apply</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0.8rem;">
+            <label style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">INVITE LINK — SHARE THIS WITH FRIENDS</label>
+            <div style="display: flex; gap: 0.5rem; margin-top: 0.3rem;">
+              <input type="text" id="lobby-link-input" class="select-control" style="font-family: monospace; font-size: 0.82rem; background: rgba(0,0,0,0.3);" readonly>
+              <button class="btn btn-primary" id="copy-lobby-btn" style="padding: 0 1rem; font-size: 0.85rem;"><i class="fa-solid fa-copy"></i> Copy</button>
+              <button class="btn" id="share-lobby-btn" style="padding: 0 1rem; font-size: 0.85rem; border-color: var(--accent-gold); color: var(--accent-gold); background: rgba(212,175,55,0.04);"><i class="fa-solid fa-share-nodes"></i> Share</button>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom: 0.8rem; display: flex; gap: 1rem;">
+            <div style="flex: 1;">
+              <label style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">ROOM TYPE</label>
+              <div id="lobby-privacy-badge" style="font-size: 0.9rem; font-weight: 700; color: #fff; margin-top: 0.3rem;"><i class="fa-solid fa-globe" style="color: var(--accent-gold)"></i> Public</div>
+            </div>
+            <div id="lobby-pin-display-group" style="flex: 1; display: none;">
+              <label style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">ROOM PIN</label>
+              <div id="lobby-pin-value" style="font-family: monospace; font-size: 1rem; font-weight: 800; color: var(--accent-gold); margin-top: 0.3rem; letter-spacing: 1px;">-</div>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom: 0.8rem;">
+            <label style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">CONNECTED FRIENDS</label>
+            <div id="connected-players-list" style="display: flex; flex-direction: column; gap: 0.4rem; max-height: 120px; overflow-y: auto; padding: 0.6rem; background: rgba(0,0,0,0.3); border-radius: 8px; font-size: 0.85rem; border: 1px solid var(--border-color); margin-top: 0.3rem;">
+              <div style="color: var(--text-secondary); text-align: center; font-style: italic; padding: 0.4rem 0;">Waiting for friends to join...</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="start-multiplayer-btn" style="width: 100%; padding: 0.8rem; font-size: 1rem; display: none; margin-top: 0.5rem;">
+            <i class="fa-solid fa-circle-play"></i> Start Multiplayer Auction
+          </button>
+          <div id="client-wait-message" style="display: none; color: var(--text-secondary); font-size: 0.85rem; text-align: center; font-style: italic; margin-top: 0.8rem;">
+            <i class="fa-solid fa-spinner fa-spin" style="color: var(--accent-gold);"></i> Waiting for host to start the game...
+          </div>
+        </div>
+
+        <!-- Recent Rooms Section -->
+        <div id="recent-rooms-panel" style="margin-top: 2rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+          <h4 style="font-size: 1rem; color: var(--accent-gold); margin-bottom: 0.8rem; font-family: Space Grotesk; letter-spacing: 0.5px;">RECENT ROOMS HISTORY</h4>
+          <div id="recent-rooms-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <div style="color: var(--text-secondary); font-size: 0.85rem; text-align: center; font-style: italic; padding: 0.4rem 0;">No active room history found.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 1: Retention Setup Screen -->
+  <div class="screen" id="retention-screen">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; margin-bottom: 1.5rem;">
+      <div>
+        <h2 style="font-size: 1.8rem; font-family: 'Space Grotesk', sans-serif;">PHASE 1: FRANCHISE RETENTIONS</h2>
+        <p style="color: var(--text-secondary); margin-top: 0.2rem;">Select up to 6 players to retain before the auction. Costs are deducted directly from each team's ₹120 Cr starting purse. Retaining fewer players grants more RTM cards.</p>
+      </div>
+      <div style="display: flex; gap: 0.8rem;">
+        <button class="btn" id="auto-retain-all-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Retain AI Teams</button>
+        <button class="btn btn-danger" id="reset-retentions-btn"><i class="fa-solid fa-trash-can"></i> Clear All</button>
+      </div>
+    </div>
+
+    <!-- 10 Franchise Retention Grid -->
+    <div class="retention-grid" id="retention-franchise-grid">
+      <!-- Generated dynamically in app.js -->
+    </div>
+
+    <div class="retention-footer-actions">
+      <div>
+        <span style="color: var(--text-secondary); font-size: 0.95rem;">
+          <i class="fa-solid fa-circle-info" style="color: var(--accent-gold);"></i> 
+          <strong>Retention Cost Schedule:</strong> Capped players: 1st (₹18Cr), 2nd (₹14Cr), 3rd (₹11Cr). Uncapped: ₹4Cr each. Max 3 retentions, max 3 capped, max 2 uncapped.
+        </span>
+      </div>
+      <button class="btn btn-primary" id="confirm-retentions-btn" style="padding: 1rem 2rem; font-size: 1.1rem;">
+        Lock Retentions & Start Live Auction <i class="fa-solid fa-circle-play"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- Phase 2: Live Auction Screen -->
+  <div class="screen" id="auction-screen">
+    <div class="auction-grid">
+      
+      <!-- Left Sidebar: Teams Dashboard -->
+      <aside class="auction-sidebar-left">
+        <div class="team-dashboard">
+          <div class="panel-title">
+            <span>FRANCHISE BOARD</span>
+            <span style="font-size: 0.75rem; color: var(--text-secondary);">Click to view squad</span>
+          </div>
+          <div class="team-list-small" id="teams-dashboard-list">
+            <!-- Dynamically populated in app.js -->
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center Column: Main Auction Bidding Board -->
+      <main class="bidding-arena">
+        
+        <!-- Live Auction Card -->
+        <div class="player-auction-card" id="active-player-auction-card" style="position: relative;">
+          <!-- Celebration Overlay -->
+          <div id="sold-celebration-overlay" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(10, 10, 15, 0.95); z-index: 10; flex-direction: column; align-items: center; justify-content: center; text-align: center; border-radius: 20px; animation: fadeIn 0.3s ease-out; backdrop-filter: blur(10px); border: 2px solid var(--accent-gold);">
+            <div style="font-size: 3rem; color: var(--accent-gold); margin-bottom: 1rem; animation: bidPulse 1s infinite alternate;"><i class="fa-solid fa-trophy"></i></div>
+            <h2 id="celebration-title" style="font-family: 'Space Grotesk', sans-serif; font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 0.5rem; letter-spacing: -0.5px;">SOLD TO MI</h2>
+            <p id="celebration-message" style="color: var(--text-secondary); font-size: 1.2rem; font-weight: 600; margin-bottom: 1.5rem;">Congratulations to Mumbai Indians!</p>
+            <div id="celebration-price" style="font-size: 1.8rem; font-weight: 800; color: var(--accent-gold); font-family: monospace;">₹21.00 Cr</div>
+          </div>
+          <div class="card-top-badges">
+            <span class="role-badge" id="active-player-role">ALL-ROUNDER</span>
+            <span class="player-nationality-badge" id="active-player-nationality">
+              <i class="fa-solid fa-plane-departure" style="color: var(--accent-gold);"></i> OVERSEAS
+            </span>
+          </div>
+
+          <div class="player-details-main">
+            <div class="player-photo-wrapper">
+              <img id="active-player-photo" class="player-photo" src="" alt="Player Photo">
+              <div id="active-player-photo-placeholder" class="player-photo-placeholder" style="display:none;"></div>
+            </div>
+            <div class="player-name-large" id="active-player-name">Rishabh Pant</div>
+            <div class="player-subtitle-details">
+              <span id="active-player-country">India</span>
+              <span id="active-player-capped-status">CAPPED</span>
+              <span id="active-player-former-team">Former Team: DC</span>
+            </div>
+          </div>
+
+          <!-- Bidding Dashboard -->
+          <div class="bidding-status-board">
+            <div class="status-board-panel" style="border-right: 1px solid var(--border-color);">
+              <span class="status-board-label" id="current-bid-label">CURRENT BID</span>
+              <span class="status-board-value current-bid-value" id="active-player-current-bid">₹2.00 Cr</span>
+            </div>
+            <div class="status-board-panel">
+              <span class="status-board-label">TIME REMAINING</span>
+              <span class="status-board-value timer-value" id="active-player-timer">30s</span>
+            </div>
+          </div>
+
+          <!-- Lead Bidder Banner -->
+          <div class="current-leader-banner" id="active-player-leader-banner">
+            Highest Bidder: <span class="current-leader-team" id="active-player-leader-team" style="background: #004BA0; color: #fff;">MI</span>
+          </div>
+        </div>
+
+        <!-- Simulator Speed & Mode Settings Board -->
+        <div class="live-log-panel" style="flex-direction: row; justify-content: space-between; align-items: center; padding: 0.8rem 1.2rem;">
+          <div style="display: flex; align-items: center; gap: 0.8rem;">
+            <span style="font-weight: 700; font-size: 0.85rem; color: var(--text-secondary);">SPEED:</span>
+            <div style="display: flex; gap: 0.3rem;">
+              <button class="filter-btn active" id="speed-normal-btn">Normal</button>
+              <button class="filter-btn" id="speed-fast-btn">Fast</button>
+              <button class="filter-btn" id="speed-instant-btn">Instant</button>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.4rem;">
+              <label for="timer-limit-select-active" style="font-weight: 700; font-size: 0.85rem; color: var(--text-secondary);">LIMIT:</label>
+              <select id="timer-limit-select-active" class="select-control" style="padding: 0.3rem 0.5rem; font-size: 0.8rem; width: auto; background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); color: #fff; border-radius: 6px;">
+                <option value="5">5 Sec</option>
+                <option value="7">7 Sec</option>
+                <option value="10">10 Sec</option>
+                <option value="15" selected>15 Sec</option>
+              </select>
+            </div>
+            <button class="btn" id="pause-timer-btn" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;"><i class="fa-solid fa-pause"></i> Pause</button>
+            <div style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; font-weight: 600;">
+              <input type="checkbox" id="auto-advance-check" checked>
+              <label for="auto-advance-check">Auto-Advance Player</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bidding Controls Panel -->
+        <div class="bidding-controls">
+          <!-- Live Manual Bidding Buttons Grid (Sandbox or User team) -->
+          <div class="quick-bids-grid" id="franchise-bid-buttons">
+            <!-- Dynamically populated team buttons in app.js -->
+          </div>
+
+          <!-- Prominent Central Yellow Bid Button -->
+          <div class="central-bid-wrapper">
+            <button class="btn-bid-central" id="bid-raise-btn">
+              <span class="bid-icon"><i class="fa-solid fa-gavel"></i></span>
+              <span class="bid-text">PLACE BID</span>
+              <span class="bid-sub" id="next-bid-amount-label">₹2.10 Cr</span>
+            </button>
+          </div>
+
+          <!-- Primary Auctioneer controls -->
+          <div class="auctioneer-confirm-row" id="host-actions-row">
+            <button class="btn" id="unsold-player-btn" style="background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: var(--danger-color);"><i class="fa-solid fa-xmark"></i> Declare UNSOLD</button>
+            <button class="btn" id="sold-player-btn" style="background: rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.3); color: var(--success-color);"><i class="fa-solid fa-check"></i> Confirm SOLD</button>
+          </div>
+        </div>
+
+        <!-- Live Auction Log -->
+        <div class="live-log-panel">
+          <div class="panel-title">
+            <span>LIVE AUCTION ACTIVITY LOG</span>
+            <span style="font-size: 0.75rem; color: var(--text-secondary);" id="active-player-progress-stats">Player 0 of 250</span>
+          </div>
+          <div class="log-feed" id="live-auction-log-feed">
+            <div class="log-item"><i class="fa-solid fa-circle-check" style="color: var(--success-color)"></i> Auction simulator initiated successfully.</div>
+          </div>
+        </div>
+
+      </main>
+
+      <!-- Right Sidebar: Statistics Leaderboard -->
+      <aside class="stats-panel-right">
+        <div class="panel-title">LIVE STATISTICS</div>
+        <div class="stat-box-grid">
+          
+          <div class="stat-box">
+            <div class="stat-box-title">Total Spending</div>
+            <div class="stat-box-value stat-box-highlight" id="stat-total-spent">₹0.00 Cr</div>
+          </div>
+          
+          <div class="stat-box">
+            <div class="stat-box-title">Most Expensive Player</div>
+            <div class="stat-box-value" id="stat-most-expensive">-</div>
+          </div>
+
+          <div class="stat-box">
+            <div class="stat-box-title">Cheapest Player</div>
+            <div class="stat-box-value" id="stat-cheapest-sold">-</div>
+          </div>
+
+          <div class="stat-box">
+            <div class="stat-box-title">Auction Progress</div>
+            <div class="stat-box-value" id="stat-progress-count">0 / 250 Players Sold</div>
+          </div>
+
+          <div class="stat-box" style="padding-bottom: 0.3rem;">
+            <div class="stat-box-title">Upcoming Players</div>
+            <div id="upcoming-players-list" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; max-height: 180px; overflow-y: auto;">
+              <!-- Dynamically populated upcoming players -->
+            </div>
+          </div>
+
+          <div class="stat-box" style="padding-bottom: 0.3rem;">
+            <div class="stat-box-title">Highest Paid Players</div>
+            <div id="highest-paid-leaderboard" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; max-height: 180px; overflow-y: auto;">
+              <!-- Dynamically populated highest paid sold players -->
+            </div>
+          </div>
+
+          <div class="stat-box" style="padding-bottom: 0.3rem;">
+            <div class="stat-box-title">Purse Spending Leaderboard</div>
+            <div class="leaderboard-spent" id="stats-spending-leaderboard">
+              <!-- Dynamically populated progress bars in app.js -->
+            </div>
+          </div>
+
+        </div>
+      </aside>
+
+      <!-- Bottom: Complete Player Pool Panel -->
+      <section class="player-pool-container">
+        <div class="panel-title">COMPLETE PLAYER REGISTRY</div>
+        
+        <!-- Filter Bar -->
+        <div class="filter-bar">
+          <div class="filter-group">
+            <span class="filter-label">ROLE:</span>
+            <button class="filter-btn active" data-filter-role="all">All</button>
+            <button class="filter-btn" data-filter-role="WK-Batter">WK</button>
+            <button class="filter-btn" data-filter-role="Batter">Batters</button>
+            <button class="filter-btn" data-filter-role="All-Rounder">All-Rounders</button>
+            <button class="filter-btn" data-filter-role="Fast Bowler">Pacers</button>
+            <button class="filter-btn" data-filter-role="Spin Bowler">Spinners</button>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">ORIGIN:</span>
+            <button class="filter-btn active" data-filter-origin="all">All</button>
+            <button class="filter-btn" data-filter-origin="indian">Indian</button>
+            <button class="filter-btn" data-filter-origin="overseas">Overseas</button>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">TYPE:</span>
+            <button class="filter-btn active" data-filter-type="all">All</button>
+            <button class="filter-btn" data-filter-type="capped">Capped</button>
+            <button class="filter-btn" data-filter-type="uncapped">Uncapped</button>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">STATUS:</span>
+            <button class="filter-btn active" data-filter-status="all">All</button>
+            <button class="filter-btn" data-filter-status="available">Available</button>
+            <button class="filter-btn" data-filter-status="sold">Sold</button>
+            <button class="filter-btn" data-filter-status="unsold">Unsold</button>
+          </div>
+          <div class="filter-group">
+            <input type="text" class="search-input" id="player-pool-search" placeholder="Search player name...">
+          </div>
+        </div>
+
+        <!-- Player Cards Grid -->
+        <div class="pool-grid-scrollable" id="player-registry-grid">
+          <!-- Dynamically populated in app.js -->
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- OVERLAYS & MODALS -->
+
+  <!-- Squad Viewer Modal -->
+  <div class="overlay-modal" id="squad-viewer-modal">
+    <div class="modal-content squad-modal-wide">
+      <div class="modal-header">
+        <div style="display:flex;align-items:center;gap:0.8rem;">
+          <div class="squad-modal-team-badge" id="squad-modal-badge">CSK</div>
+          <div class="modal-title" id="squad-modal-team-title">Chennai Super Kings</div>
+        </div>
+        <button class="modal-close" onclick="closeModal('squad-viewer-modal')">&times;</button>
+      </div>
+
+      <!-- 6 KPI Tiles -->
+      <div class="squad-kpi-row">
+        <div class="squad-kpi-tile">
+          <div class="squad-kpi-label">💰 Purse Left</div>
+          <div class="squad-kpi-val gold" id="squad-modal-purse">₹120.00 Cr</div>
+        </div>
+        <div class="squad-kpi-tile">
+          <div class="squad-kpi-label">👥 Squad Size</div>
+          <div class="squad-kpi-val" id="squad-modal-squad-size">0 / 25</div>
+        </div>
+        <div class="squad-kpi-tile">
+          <div class="squad-kpi-label">✈️ Overseas</div>
+          <div class="squad-kpi-val" id="squad-modal-overseas">0 / 8</div>
+        </div>
+        <div class="squad-kpi-tile">
+          <div class="squad-kpi-label">🃏 RTM Cards</div>
+          <div class="squad-kpi-val" id="squad-modal-rtm">3</div>
+        </div>
+        <div class="squad-kpi-tile">
+          <div class="squad-kpi-label">💸 Total Spent</div>
+          <div class="squad-kpi-val" id="squad-modal-spent">₹0.00 Cr</div>
+        </div>
+        <div class="squad-kpi-tile">
+          <div class="squad-kpi-label">🏏 Playing XI</div>
+          <div class="squad-kpi-val" id="squad-modal-xi-status">0 / 11</div>
+        </div>
+      </div>
+
+      <!-- Tab bar -->
+      <div class="squad-tab-bar">
+        <button class="squad-tab active" data-tab="xi">🏟️ Playing XI</button>
+        <button class="squad-tab" data-tab="wk">🧤 WK (0)</button>
+        <button class="squad-tab" data-tab="bat">🏏 Batters (0)</button>
+        <button class="squad-tab" data-tab="ar">⚡ All-Rounders (0)</button>
+        <button class="squad-tab" data-tab="bowl">🎯 Bowlers (0)</button>
+        <button class="squad-tab" data-tab="full">📋 Full Squad</button>
+      </div>
+
+      <!-- Tab panels -->
+      <div class="squad-tab-content" id="squad-tab-xi">
+        <div class="xi-cards-grid" id="playing-xi-slots-grid"></div>
+        <div class="xi-validation-bar" id="playing-xi-validation-status">
+          Select a team to see their Playing XI
+        </div>
+      </div>
+      <div class="squad-tab-content" id="squad-tab-wk"   style="display:none"><div class="squad-role-list" id="squad-list-wk"></div></div>
+      <div class="squad-tab-content" id="squad-tab-bat"  style="display:none"><div class="squad-role-list" id="squad-list-bat"></div></div>
+      <div class="squad-tab-content" id="squad-tab-ar"   style="display:none"><div class="squad-role-list" id="squad-list-ar"></div></div>
+      <div class="squad-tab-content" id="squad-tab-bowl" style="display:none"><div class="squad-role-list" id="squad-list-bowl"></div></div>
+      <div class="squad-tab-content" id="squad-tab-full" style="display:none"><div class="squad-list-grid" id="squad-modal-players-list"></div></div>
+    </div>
+  </div>
+
+  <!-- RTM Prompt Overlay Modal -->
+  <div class="overlay-modal" id="rtm-prompt-modal">
+    <div class="modal-content" style="max-width: 450px;">
+      <div class="rtm-prompt-card">
+        <div class="rtm-alert-banner">Right To Match Opportunity</div>
+        
+        <div class="rtm-player-profile">
+          <h3 id="rtm-player-name" style="font-size: 1.6rem; font-family: 'Space Grotesk', sans-serif;">Virat Kohli</h3>
+          <p id="rtm-player-details" style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.3rem;">India • Batter</p>
+        </div>
+
+        <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px; font-size: 0.95rem;">
+          <p>Former Team: <strong id="rtm-former-team-name" style="color: var(--accent-gold);">RCB</strong></p>
+          <p>Highest Bid: <strong id="rtm-highest-bid-val">₹12.00 Cr</strong> by <strong id="rtm-highest-bidder-name">MI</strong></p>
+        </div>
+
+        <p id="rtm-prompt-message" style="font-size: 0.9rem; line-height: 1.5;">Do they want to match this bid and retain the player?</p>
+
+        <!-- Dynamic User or AI Resolution displays -->
+        <div class="rtm-action-buttons" id="rtm-action-buttons-box">
+          <button class="btn btn-danger" id="rtm-decline-btn" style="flex: 1;">Decline Match</button>
+          <button class="btn btn-primary" id="rtm-confirm-btn" style="flex: 1;">Use RTM Card (Match Bid)</button>
+        </div>
+
+        <div id="rtm-ai-thinking" style="display: none; align-items: center; justify-content: center; gap: 0.8rem; font-weight: 700;">
+          <i class="fa-solid fa-spinner fa-spin" style="color: var(--accent-gold);"></i> Team <span id="rtm-ai-team-name">RCB</span> is deciding...
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Balloon Celebration Overlay -->
+  <div id="balloon-container"></div>
+
+  <script src="database.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
