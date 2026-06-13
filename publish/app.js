@@ -929,7 +929,17 @@ function syncStateToClients() {
 }
 
 // Host: create room on server and set up lobby UI
+async function waitForSocketConnection() {
+  if (socket.connected) return;
+  await new Promise((resolve) => {
+    socket.once('connect', resolve);
+    socket.once('connect_error', resolve);
+    socket.once('connect_timeout', resolve);
+  });
+}
+
 async function initHostPeer() {
+  await waitForSocketConnection();
   const privacyVal = document.querySelector('input[name="room-privacy"]:checked').value;
   isPrivateRoom = (privacyVal === 'private');
   if (isPrivateRoom) {
@@ -3464,7 +3474,7 @@ resetAuctionBtn.onclick = () => {
 };
 
 // Create Room Button
-createRoomBtn.onclick = () => {
+createRoomBtn.onclick = async () => {
   isMultiplayer = true;
   isHost = true;
   simulationMode = 'franchise';
@@ -3479,7 +3489,7 @@ createRoomBtn.onclick = () => {
   startMultiplayerBtn.style.display = 'block';
   clientWaitMessage.style.display = 'none';
 
-  initHostPeer();
+  await initHostPeer();
 };
 
 // Start Multiplayer Button (Host only)
@@ -3510,7 +3520,7 @@ startMultiplayerBtn.onclick = () => {
 };
 
 // Lobby Guest Join click binding
-joinLobbyBtn.onclick = () => {
+joinLobbyBtn.onclick = async () => {
   const name = welcomeNameInput.value.trim() || 'Guest';
   const code = extractRoomIdFromSearch(window.location.search);
   const teamId = parseInt(userTeamSelect.value);
@@ -3528,6 +3538,7 @@ joinLobbyBtn.onclick = () => {
   joinLobbyBtn.disabled = true;
   joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting...';
   
+  await waitForSocketConnection();
   initClientPeer(code, name, teamId, pin);
 };
 
@@ -3573,15 +3584,14 @@ const _roomParam  = extractRoomIdFromSearch(window.location.search);
 const _pinParam   = extractPinFromSearch(window.location.search);
 
 if (_roomParam) {
-  // If this page was opened from Live Server (5500) but room link
-  // points to Node server (3000), redirect to the correct origin.
+  const isLocalDevelopment = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
   const currentPort = window.location.port;
-  if (currentPort && currentPort !== '3000') {
-    // Auto-redirect to Node server so socket.io works properly
+
+  if (isLocalDevelopment && currentPort && currentPort !== '3000') {
+    // Auto-redirect only for local dev to the Node server port.
     const correctUrl = `http://${window.location.hostname}:3000/?room=${encodeURIComponent(_roomParam)}${_pinParam ? '&pin=' + encodeURIComponent(_pinParam) : ''}`;
     window.location.replace(correctUrl);
   } else {
-    // Already on correct server — show guest join UI
     startRetentionBtn.style.display = 'none';
     createRoomBtn.style.display = 'none';
     guestInvitePanel.style.display = 'block';

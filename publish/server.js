@@ -26,11 +26,13 @@ app.use(express.static(__dirname));
 
 // API: return server's own origin so frontend builds correct room links
 app.get('/api/server-info', (req, res) => {
+  const origin = `${req.protocol}://${req.get('host')}`;
   const lan = getLanIp();
   res.json({
-    localUrl:  `http://localhost:${PORT}`,
-    lanUrl:    `http://${lan}:${PORT}`,
-    port:      PORT
+    origin,
+    localUrl: `http://localhost:${PORT}`,
+    lanUrl: `http://${lan}:${PORT}`,
+    port: PORT
   });
 });
 
