@@ -102,6 +102,7 @@ let speed = 'normal'; // 'normal' | 'fast' | 'instant'
 let simulationMode = 'franchise'; // 'franchise' | 'spectator' | 'sandbox'
 let userTeamId = 3; // KKR
 let selectedRetentions = {}; // teamId -> Set of playerIds
+let selectedXIByTeam = {}; // teamId -> Array of selected playerIds for final XI slots
 let isRtmPhase = false;
 let rtmResolutionPromise = null;
 
@@ -139,6 +140,12 @@ let shareBaseUrlResolved = false;
 
 async function resolveShareBaseUrl() {
   if (shareBaseUrlResolved) return shareBaseUrl;
+  const isLocal = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
+  if (!isLocal) {
+    shareBaseUrl = window.location.origin;
+    shareBaseUrlResolved = true;
+    return shareBaseUrl;
+  }
   try {
     const response = await fetch(serverUrl + '/api/server-info');
     const info = await response.json();
@@ -231,6 +238,23 @@ socket.on('guest-disconnected', (peerId) => {
 socket.on('lobby-update', ({ clientPlayers: updatedPlayers }) => {
   clientPlayers = updatedPlayers;
   updateLobbyPlayersUI();
+
+  // If we are on the landing/welcome screen, update the franchise selector grid
+  if (phase === 'setup') {
+    const takenTeamIds = clientPlayers
+      .filter(p => p.peerId !== socket.id)
+      .map(p => p.teamId);
+    renderFranchiseSelectorGrid(takenTeamIds);
+  }
+});
+
+socket.on('change-team-ack', ({ success, teamId, error }) => {
+  if (success) {
+    userTeamId = teamId;
+    userTeamSelect.value = teamId.toString();
+  } else {
+    alert(error || "Failed to switch team");
+  }
 });
 
 // ── Guest: server tells guest whether the join was accepted or rejected
@@ -754,7 +778,17 @@ function rejoinRoom(item) {
     
     joinLobbyBtn.disabled = true;
     joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Reconnecting...';
-    initClientPeer(item.roomId, item.userName, item.teamId, item.pin || '');
+    
+    (async () => {
+      const connected = await waitForSocketConnection();
+      if (!connected) {
+        alert("Unable to reconnect to the server. Please check your internet connection and try again.");
+        joinLobbyBtn.disabled = false;
+        joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
+        return;
+      }
+      initClientPeer(item.roomId, item.userName, item.teamId, item.pin || '');
+    })();
   }
 }
 
@@ -791,7 +825,8 @@ function saveHostGameStateToLocalStorage() {
       remainingPurseLakhs: f.remainingPurseLakhs,
       rtmCardsLeft: f.rtmCardsLeft,
       draftedPlayerIds: f.draftedPlayerIds
-    }))
+    })),
+    selectedXIByTeam: selectedXIByTeam
   };
   localStorage.setItem(LOCAL_STORAGE_STATE_PREFIX + myPeerId, JSON.stringify(statePacket));
 }
@@ -842,6 +877,7 @@ function loadHostGameStateFromLocalStorage(roomId) {
     for (let tid in state.selectedRetentions) {
       selectedRetentions[tid] = new Set(state.selectedRetentions[tid]);
     }
+    selectedXIByTeam = state.selectedXIByTeam || {};
     
     logActivity('bid', `Lobby state successfully restored from LocalStorage.`);
     return true;
@@ -852,12 +888,23 @@ function loadHostGameStateFromLocalStorage(roomId) {
 }
 
 // Render Franchise grid selector on welcome page
-function renderFranchiseSelectorGrid() {
+function renderFranchiseSelectorGrid(takenTeamIds = []) {
   teamLogoGrid.innerHTML = '';
   FRANCHISES.forEach(f => {
+    const isTaken = takenTeamIds.includes(f.id);
     const card = document.createElement('div');
     card.className = 'team-logo-card';
-    if (userTeamId === f.id) {
+    if (isTaken) {
+      card.classList.add('taken');
+      card.style.opacity = '0.4';
+      card.style.pointerEvents = 'none';
+      card.style.cursor = 'not-allowed';
+      
+      const takenLabel = document.createElement('span');
+      takenLabel.textContent = 'TAKEN';
+      takenLabel.style.cssText = 'position:absolute; top:2px; right:2px; font-size:9px; background:var(--danger-color); color:#fff; padding:1px 4px; border-radius:3px; font-weight:700;';
+      card.appendChild(takenLabel);
+    } else if (userTeamId === f.id) {
       card.classList.add('selected');
     }
     card.dataset.teamId = f.id;
@@ -875,12 +922,19 @@ function renderFranchiseSelectorGrid() {
     card.appendChild(circle);
     card.appendChild(name);
     
-    card.onclick = () => {
-      teamLogoGrid.querySelectorAll('.team-logo-card').forEach(c => c.classList.remove('selected'));
-      card.classList.add('selected');
-      userTeamId = f.id;
-      userTeamSelect.value = f.id;
-    };
+    if (!isTaken) {
+      card.onclick = () => {
+        if (isMultiplayer) {
+          const roomId = isHost ? myPeerId : extractRoomIdFromSearch(window.location.search);
+          socket.emit('change-team', { roomId, teamId: f.id });
+        } else {
+          teamLogoGrid.querySelectorAll('.team-logo-card').forEach(c => c.classList.remove('selected'));
+          card.classList.add('selected');
+          userTeamId = f.id;
+          userTeamSelect.value = f.id;
+        }
+      };
+    }
     
     teamLogoGrid.appendChild(card);
   });
@@ -910,6 +964,7 @@ function syncStateToClients() {
       speed: speed,
       simulationMode: simulationMode,
       selectedRetentions: retentionsObj,
+      selectedXIByTeam: selectedXIByTeam,
       clientPlayers: clientPlayers,
       players: players.map(p => ({
         id: p.id,
@@ -930,11 +985,27 @@ function syncStateToClients() {
 
 // Host: create room on server and set up lobby UI
 async function waitForSocketConnection() {
-  if (socket.connected) return;
-  await new Promise((resolve) => {
-    socket.once('connect', resolve);
-    socket.once('connect_error', resolve);
-    socket.once('connect_timeout', resolve);
+  if (socket.connected) return true;
+  return new Promise((resolve) => {
+    const onConnect = () => {
+      cleanup();
+      resolve(true);
+    };
+    const onConnectError = (err) => {
+      console.warn('Socket connection error while waiting:', err);
+    };
+    socket.on('connect', onConnect);
+    socket.on('connect_error', onConnectError);
+    
+    const cleanup = () => {
+      socket.off('connect', onConnect);
+      socket.off('connect_error', onConnectError);
+    };
+
+    setTimeout(() => {
+      cleanup();
+      resolve(socket.connected);
+    }, 15000);
   });
 }
 
@@ -1045,7 +1116,8 @@ function resumeHostLobby(roomId) {
   }
   logActivity('bid', `Lobby state resumed. Room Code: <strong>${roomId}</strong>`);
 
-  if (socket) {
+  (async () => {
+    await waitForSocketConnection();
     socket.emit('host-create-room', {
       roomId: roomId,
       pin: hostRoomPin,
@@ -1053,7 +1125,7 @@ function resumeHostLobby(roomId) {
       playerName: welcomeNameInput.value.trim() || 'Host',
       teamId: userTeamId
     });
-  }
+  })();
 }
 
 
@@ -1227,7 +1299,14 @@ function initApp() {
   clientPlayers = [];
   myPeerId = socket.id || "";
   phase = "setup";
+  selectedXIByTeam = {};
   
+  const isLocal = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
+  const networkGuide = document.getElementById('network-guide');
+  if (networkGuide) {
+    networkGuide.style.display = isLocal ? 'block' : 'none';
+  }
+
   lobbyStatusContainer.style.display = 'none';
   startRetentionBtn.style.display = 'block';
   createRoomBtn.style.display = 'block';
@@ -1346,7 +1425,7 @@ function initRetentionScreen() {
 
   franchises.forEach(f => {
     selectedRetentions[f.id] = new Set();
-    const teamFormerPlayers = PLAYERS.filter(p => p.formerTeamId === f.id);
+    const teamFormerPlayers = PLAYERS.filter(p => p.formerTeamId === f.id && p.country !== 'Pakistan');
 
     const card = document.createElement('div');
     card.className = 'team-retention-card';
@@ -1381,9 +1460,10 @@ function initRetentionScreen() {
     const indicators = document.createElement('div');
     indicators.className = 'retention-status-indicators';
     indicators.innerHTML = `
-      <div class="status-badge"><span>Capped:</span><strong id="retention-capped-${f.id}">0/3</strong></div>
-      <div class="status-badge"><span>Uncapped:</span><strong id="retention-uncapped-${f.id}">0/2</strong></div>
-      <div class="status-badge" style="grid-column: span 2; justify-content: center; gap: 0.5rem;">
+      <div class="status-badge" style="grid-column: span 1; justify-content: center; gap: 0.5rem;">
+        <span>Retained:</span><strong id="retention-count-${f.id}">0/3</strong>
+      </div>
+      <div class="status-badge" style="grid-column: span 1; justify-content: center; gap: 0.5rem;">
         <span>RTM Cards:</span><strong id="retention-rtm-${f.id}">3</strong>
       </div>
     `;
@@ -1447,26 +1527,19 @@ function initRetentionScreen() {
 }
 
 function getRetentionCostAndRtm(retainedList) {
-  const capped = retainedList.filter(p => !p.isUncapped);
-  const uncapped = retainedList.filter(p => p.isUncapped);
-
   let totalCostLakhs = 0;
-  // Capped Retention Costs Schedule: ₹18 Cr, ₹14 Cr, ₹11 Cr, ₹18 Cr, ₹14 Cr
-  const cappedCosts = [1800, 1400, 1100, 1800, 1400];
-  capped.forEach((p, idx) => {
-    totalCostLakhs += cappedCosts[idx] || 0;
+  const costs = [1600, 1200, 800];
+  retainedList.forEach((p, idx) => {
+    totalCostLakhs += costs[idx] || 0;
   });
-
-  // Uncapped Retention Cost: ₹4 Cr each
-  totalCostLakhs += uncapped.length * 400;
 
   const rtmLeft = Math.max(0, 3 - retainedList.length);
 
   return {
     cost: totalCostLakhs,
     rtm: rtmLeft,
-    cappedCount: capped.length,
-    uncappedCount: uncapped.length
+    cappedCount: retainedList.filter(p => !p.isUncapped).length,
+    uncappedCount: retainedList.filter(p => p.isUncapped).length
   };
 }
 
@@ -1485,25 +1558,15 @@ function toggleRetention(teamId, playerId, rowElement) {
   }
 
   const teamSet = selectedRetentions[teamId];
-  const player = PLAYERS.find(p => p.id === playerId);
 
   if (teamSet.has(playerId)) {
     teamSet.delete(playerId);
     rowElement.classList.remove('selected');
   } else {
     const retainedList = Array.from(teamSet).map(id => PLAYERS.find(p => p.id === id));
-    const stats = getRetentionCostAndRtm(retainedList);
 
     if (retainedList.length >= 3) {
       alert("Maximum of 3 retentions allowed per franchise!");
-      return;
-    }
-    if (player.isUncapped && stats.uncappedCount >= 2) {
-      alert("Maximum of 2 uncapped player retentions allowed!");
-      return;
-    }
-    if (!player.isUncapped && stats.cappedCount >= 3) {
-      alert("Maximum of 3 capped player retentions allowed!");
       return;
     }
 
@@ -1525,8 +1588,7 @@ function updateTeamRetentionCardUI(teamId) {
   const purseLakhs = 12000 - stats.cost;
 
   document.getElementById(`retention-purse-${teamId}`).textContent = formatPurse(purseLakhs);
-  document.getElementById(`retention-capped-${teamId}`).textContent = `${stats.cappedCount}/3`;
-  document.getElementById(`retention-uncapped-${teamId}`).textContent = `${stats.uncappedCount}/2`;
+  document.getElementById(`retention-count-${teamId}`).textContent = `${retainedList.length}/3`;
   document.getElementById(`retention-rtm-${teamId}`).textContent = stats.rtm;
 }
 
@@ -1538,20 +1600,13 @@ function autoRetainAllAITeams() {
     const teamSet = selectedRetentions[f.id];
     teamSet.clear();
 
-    const former = PLAYERS.filter(p => p.formerTeamId === f.id);
-    const capped = former.filter(p => !p.isUncapped).sort((a, b) => b.basePriceLakhs - a.basePriceLakhs);
-    const uncapped = former.filter(p => p.isUncapped).sort((a, b) => b.basePriceLakhs - a.basePriceLakhs);
-
-    // AI retains 1 to 3 of their top capped players (max 3 total)
-    const numCapped = Math.min(capped.length, Math.floor(Math.random() * 2) + 1, 3);
-    for (let i = 0; i < numCapped; i++) {
-      if (capped[i]) teamSet.add(capped[i].id);
-    }
-
-    // AI retains 0 or 1 uncapped (only if total retentions < 3)
-    const numUncapped = Math.min(uncapped.length, Math.floor(Math.random() * 2), Math.max(0, 3 - numCapped));
-    for (let i = 0; i < numUncapped; i++) {
-      if (uncapped[i]) teamSet.add(uncapped[i].id);
+    const former = PLAYERS.filter(p => p.formerTeamId === f.id && p.country !== 'Pakistan');
+    
+    // AI retains 1 to 3 of their top former players
+    const candidates = [...former].sort((a, b) => b.basePriceLakhs - a.basePriceLakhs);
+    const numToRetain = Math.min(candidates.length, Math.floor(Math.random() * 3) + 1); // 1 to 3
+    for (let i = 0; i < numToRetain; i++) {
+      if (candidates[i]) teamSet.add(candidates[i].id);
     }
 
     // Refresh Card UI selection classes
@@ -2070,6 +2125,15 @@ const CRICINFO_ID_MAP = {
 };
 
 function getPlayerPhotoUrl(player) {
+  // Local override folder (place custom photos in publish/player_photos/)
+  const LOCAL_PLAYER_PHOTOS = {
+    "Trent Boult": "player_photos/trent_boult.jpg"
+  };
+  const local = LOCAL_PLAYER_PHOTOS[player.name];
+  if (local) {
+    return local; // relative path served from the publish/ root
+  }
+
   const cricId = CRICINFO_ID_MAP[player.name];
   if (cricId) {
     // Primary: ESPN Cricinfo player headshot (official CDN)
@@ -2416,9 +2480,12 @@ function resolveActivePlayer() {
 
   const formerTeam = franchises.find(f => f.id === player.formerTeamId);
   const highestBidder = franchises.find(f => f.id === currentHighestBidderId);
+  const isPakistani = player.country === 'Pakistan';
 
-  const rtmEligible = formerTeam.id !== highestBidder.id && 
+  const rtmEligible = !isPakistani &&
+                      formerTeam.id !== highestBidder.id && 
                       formerTeam.rtmCardsLeft > 0 && 
+                      currentBidLakhs >= 100 && currentBidLakhs <= 1000 &&
                       canTeamBid(formerTeam, player, currentBidLakhs);
 
   if (rtmEligible) {
@@ -2723,28 +2790,14 @@ confirmRetentionsBtn.onclick = () => {
     f.remainingPurseLakhs = 12000 - stats.cost;
     f.rtmCardsLeft = stats.rtm;
 
-    // Separate retained capped vs uncapped to deduct cost sequentially
-    const capped = retainedPlayersList.filter(p => !p.isUncapped);
-    const uncapped = retainedPlayersList.filter(p => p.isUncapped);
-
-    const cappedCosts = [1800, 1400, 1100, 1800, 1400];
+    const costs = [1600, 1200, 800];
     
     // Assign sold prices to retained players
-    capped.forEach((p, index) => {
+    retainedPlayersList.forEach((p, index) => {
       const livePlayerRef = players.find(lp => lp.id === p.id);
       if (livePlayerRef) {
         livePlayerRef.status = 'retained';
-        livePlayerRef.soldPriceLakhs = cappedCosts[index] || 0;
-        livePlayerRef.boughtBy = f.id;
-      }
-      f.draftedPlayerIds.push(p.id);
-    });
-
-    uncapped.forEach(p => {
-      const livePlayerRef = players.find(lp => lp.id === p.id);
-      if (livePlayerRef) {
-        livePlayerRef.status = 'retained';
-        livePlayerRef.soldPriceLakhs = 400;
+        livePlayerRef.soldPriceLakhs = costs[index] || 0;
         livePlayerRef.boughtBy = f.id;
       }
       f.draftedPlayerIds.push(p.id);
@@ -3156,6 +3209,10 @@ function showSquadModal(teamId) {
   renderRoleList('squad-list-bowl', bowl, team);
   renderFullSquadList('squad-modal-players-list', teamSquad, team);
 
+  // Prepare manual XI builder state and UI
+  selectedXIByTeam[team.id] = (selectedXIByTeam[team.id] || []).filter(id => team.draftedPlayerIds.includes(id));
+  buildXISelectionPanel(team, teamSquad);
+
   // ── Playing XI ───────────────────────────────────────────────────────────
   updatePlayingXIUI(teamSquad, team);
 
@@ -3168,6 +3225,146 @@ function showSquadModal(teamId) {
   if (xiPanel) xiPanel.style.display = 'block';
 
   document.getElementById('squad-viewer-modal').classList.add('active');
+}
+
+function getManualXIForTeam(team, teamSquad) {
+  const selectedIds = selectedXIByTeam[team.id] || [];
+  return selectedIds
+    .map(id => teamSquad.find(p => p.id === id))
+    .filter(Boolean)
+    .slice(0, 11);
+}
+
+function buildXISelectionPanel(team, teamSquad) {
+  const poolEl = document.getElementById('xi-squad-draggable-pool');
+  const selectedIds = new Set(selectedXIByTeam[team.id] || []);
+  poolEl.innerHTML = '';
+
+  const availablePlayers = teamSquad
+    .filter(p => !selectedIds.has(p.id))
+    .sort((a, b) => b.soldPriceLakhs - a.soldPriceLakhs);
+
+  if (availablePlayers.length === 0) {
+    poolEl.innerHTML = '<div class="squad-empty-msg">No draftable players remain outside your XI.</div>';
+  } else {
+    availablePlayers.forEach(p => {
+      const row = document.createElement('div');
+      row.className = 'squad-player-row xi-drag-item';
+      row.draggable = true;
+      row.dataset.playerId = p.id;
+      row.innerHTML = `
+        <div class="squad-player-info">
+          <span class="squad-player-name-text">${p.name}</span>
+          <div class="squad-player-meta-badges">${makeBadges(p)}</div>
+        </div>
+        <span style="font-weight:700;color:var(--accent-gold);">${formatLakhs(p.soldPriceLakhs)}</span>
+      `;
+      row.addEventListener('dragstart', e => {
+        e.dataTransfer.setData('text/plain', String(p.id));
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      poolEl.appendChild(row);
+    });
+  }
+
+  const resetBtn = document.getElementById('xi-reset-btn');
+  if (resetBtn) {
+    resetBtn.onclick = () => {
+      selectedXIByTeam[team.id] = [];
+      buildXISelectionPanel(team, teamSquad);
+      updatePlayingXIUI(teamSquad, team);
+    };
+  }
+
+  renderXISelectionGrid(team, teamSquad);
+}
+
+function renderXISelectionGrid(team, teamSquad) {
+  const grid = document.getElementById('playing-xi-slots-grid');
+  grid.innerHTML = '';
+
+  const roleClr = { WK:'#D4AF37', BAT:'#10B981', AR:'#3B82F6', BOWL:'#EF4444' };
+  const selectedPlayers = getManualXIForTeam(team, teamSquad);
+
+  for (let index = 0; index < 11; index++) {
+    const player = selectedPlayers[index] || null;
+    const card = document.createElement('div');
+    card.className = `xi-card ${player ? 'xi-card-filled' : ''}`;
+    card.dataset.slotIndex = String(index);
+    card.addEventListener('dragover', e => e.preventDefault());
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      const playerId = parseInt(e.dataTransfer.getData('text/plain'));
+      if (!Number.isNaN(playerId)) {
+        assignPlayerToXI(team, teamSquad, playerId, index);
+      }
+    });
+
+    const playerRole = player ? (player.role === 'WK-Batter' ? 'WK' : player.role === 'Batter' ? 'BAT' : player.role === 'All-Rounder' ? 'AR' : 'BOWL') : null;
+    const clr = playerRole ? roleClr[playerRole] : '#4B5563';
+    const icon = playerRole ? (playerRole === 'WK' ? '🧤' : playerRole === 'BAT' ? '🏏' : playerRole === 'AR' ? '⚡' : '🎯') : '👤';
+    const roleLbl = playerRole ? playerRole : `SLOT ${index + 1}`;
+
+    if (player) {
+      const initials = player.name.split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase();
+      card.innerHTML = `
+        <div class="xi-card-slot-lbl" style="background:${clr};color:#000;">${icon} ${roleLbl}</div>
+        <div class="xi-card-photo"><div class="xi-card-initials">${initials}</div></div>
+        <div class="xi-card-name">${player.name}</div>
+        <div class="xi-card-meta">
+          ${player.isOverseas ? '<span class="xi-os-badge">OS</span>' : ''}
+          <span class="xi-card-price">${formatLakhs(player.soldPriceLakhs)}</span>
+        </div>
+      `;
+      card.draggable = true;
+      card.addEventListener('dragstart', e => {
+        e.dataTransfer.setData('text/plain', String(player.id));
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      card.addEventListener('click', () => {
+        removePlayerFromXI(team.id, player.id, teamSquad);
+      });
+    } else {
+      card.innerHTML = `
+        <div class="xi-card-slot-lbl" style="background:${clr};color:#fff;">${icon} ${roleLbl}</div>
+        <div class="xi-card-photo xi-card-empty-photo"><span style="font-size:1.6rem;opacity:0.2;">${icon}</span></div>
+        <div class="xi-card-name xi-empty-name">EMPTY SLOT</div>
+        <div class="xi-card-meta" style="color:rgba(255,255,255,0.2);font-size:0.65rem;">Drop a player here</div>
+      `;
+    }
+    grid.appendChild(card);
+  }
+}
+
+function assignPlayerToXI(team, teamSquad, playerId, slotIndex) {
+  selectedXIByTeam[team.id] = selectedXIByTeam[team.id] || [];
+  const selectedIds = selectedXIByTeam[team.id];
+  const validPlayer = teamSquad.find(p => p.id === playerId);
+  if (!validPlayer) return;
+
+  const existingIndex = selectedIds.indexOf(playerId);
+  if (existingIndex !== -1) {
+    selectedIds.splice(existingIndex, 1);
+  }
+
+  selectedIds[slotIndex] = playerId;
+  selectedXIByTeam[team.id] = selectedIds.filter(id => id != null);
+  if (selectedXIByTeam[team.id].length > 11) {
+    selectedXIByTeam[team.id] = selectedXIByTeam[team.id].slice(0, 11);
+  }
+
+  buildXISelectionPanel(team, teamSquad);
+  updatePlayingXIUI(teamSquad, team);
+}
+
+function removePlayerFromXI(teamId, playerId, teamSquad) {
+  selectedXIByTeam[teamId] = selectedXIByTeam[teamId] || [];
+  const idx = selectedXIByTeam[teamId].indexOf(playerId);
+  if (idx !== -1) {
+    selectedXIByTeam[teamId].splice(idx, 1);
+    buildXISelectionPanel(franchises.find(f => f.id === teamId), teamSquad);
+    updatePlayingXIUI(teamSquad, franchises.find(f => f.id === teamId));
+  }
 }
 
 function makeBadges(p) {
@@ -3246,90 +3443,56 @@ window.closeModal = function(id) {
 // ── Playing XI builder ─────────────────────────────────────────────────────
 function getProjectedPlayingXI(squad) {
   const sorted = [...squad].sort((a, b) => b.soldPriceLakhs - a.soldPriceLakhs);
-  const wkPool    = sorted.filter(p => p.role === 'WK-Batter');
-  const batPool   = sorted.filter(p => p.role === 'Batter');
-  const arPool    = sorted.filter(p => p.role === 'All-Rounder');
-  const fastPool  = sorted.filter(p => p.role === 'Fast Bowler');
-  const spinPool  = sorted.filter(p => p.role === 'Spin Bowler');
-  const bowlPool  = sorted.filter(p => p.role === 'Fast Bowler' || p.role === 'Spin Bowler');
-
   const xi = [];
   let osCount = 0;
 
-  function tryAdd(p) {
-    if (!p || xi.some(x => x.id === p.id)) return false;
-    if (p.isOverseas && osCount >= 4) return false; // Max 4 OS in playing XI
-    xi.push(p);
-    if (p.isOverseas) osCount++;
-    return true;
+  for (const p of sorted) {
+    if (xi.length >= 11) break;
+    if (p.isOverseas) {
+      if (osCount < 4) {
+        xi.push(p);
+        osCount++;
+      }
+    } else {
+      xi.push(p);
+    }
   }
 
-  // Slot 1: Best WK (prefer Indian first if OS limit is tight)
-  tryAdd(wkPool.find(p=>!p.isOverseas) || wkPool[0]);
-
-  // Slots 2-5: 4 Batters
-  let nb = 0;
-  for (const p of batPool) { if (nb >= 4) break; if (tryAdd(p)) nb++; }
-  for (const p of wkPool)  { if (nb >= 4) break; if (tryAdd(p)) nb++; } // overflow WK as batters
-
-  // Slots 6-7: 2 All-Rounders
-  let na = 0;
-  for (const p of arPool) { if (na >= 2) break; if (tryAdd(p)) na++; }
-
-  // Slots 8-11: 4 Bowlers (try 2 fast + 2 spin)
-  let nb2 = 0, nf = 0, ns = 0;
-  for (const p of fastPool) { if (nf >= 2) break; if (tryAdd(p)) { nf++; nb2++; } }
-  for (const p of spinPool) { if (ns >= 2) break; if (tryAdd(p)) { ns++; nb2++; } }
-  for (const p of bowlPool) { if (nb2 >= 4) break; if (tryAdd(p)) nb2++; }
-
-  // Fill remaining to 11
-  for (const p of sorted) { if (xi.length >= 11) break; tryAdd(p); }
-
-  return xi.slice(0, 11);
+  return xi;
 }
 
 function updatePlayingXIUI(squad, team) {
   const grid = document.getElementById('playing-xi-slots-grid');
   grid.innerHTML = '';
 
-  const xi   = getProjectedPlayingXI(squad);
-  const os   = xi.filter(p => p.isOverseas).length;
-  const ind  = xi.length - os;
-  const bar  = document.getElementById('playing-xi-validation-status');
+  const manualXI = getManualXIForTeam(team, squad);
+  const xi        = manualXI.length > 0 ? manualXI : getProjectedPlayingXI(squad);
+  const os        = xi.filter(p => p.isOverseas).length;
+  const ind       = xi.length - os;
+  const bar       = document.getElementById('playing-xi-validation-status');
 
   document.getElementById('squad-modal-xi-status').textContent = `${xi.length} / 11`;
 
   if (xi.length === 0) {
     bar.innerHTML = '<span style="color:var(--text-secondary)">No players drafted yet — buy players to build your XI.</span>';
   } else if (xi.length < 11) {
-    bar.innerHTML = `<span style="color:var(--warning-color)">⚠ Incomplete XI (${xi.length}/11). Need ${11-xi.length} more players.</span>`;
+    bar.innerHTML = `<span style="color:var(--warning-color)">⚠ Incomplete XI (${xi.length}/11). Select ${11-xi.length} more players from the squad.</span>`;
   } else {
     const valid = os <= 4 && ind >= 7;
     bar.innerHTML = valid
       ? `<span style="color:var(--success-color)">✅ Valid XI — ${ind} Indians, ${os} Overseas (Max 4 OS)</span>`
-      : `<span style="color:var(--danger-color)">❌ Invalid — ${os} overseas (max 4 allowed in XI)</span>`;
+      : `<span style="color:var(--danger-color)">❌ Invalid XI — ${os} overseas or fewer than 7 Indians.</span>`;
   }
-
-  // Slot definitions: WK=1, BAT=4, AR=2, BOWL=4
-  const slotDefs = [
-    { label:'WK',   icon:'🧤', role:'Wicket Keeper' },
-    { label:'BAT',  icon:'🏏', role:'Batter 1' },
-    { label:'BAT',  icon:'🏏', role:'Batter 2' },
-    { label:'BAT',  icon:'🏏', role:'Batter 3' },
-    { label:'BAT',  icon:'🏏', role:'Batter 4' },
-    { label:'AR',   icon:'⚡', role:'All-Rounder 1' },
-    { label:'AR',   icon:'⚡', role:'All-Rounder 2' },
-    { label:'BOWL', icon:'🎯', role:'Bowler 1' },
-    { label:'BOWL', icon:'🎯', role:'Bowler 2' },
-    { label:'BOWL', icon:'🎯', role:'Bowler 3' },
-    { label:'BOWL', icon:'🎯', role:'Bowler 4' },
-  ];
 
   const roleClr = { WK:'#D4AF37', BAT:'#10B981', AR:'#3B82F6', BOWL:'#EF4444' };
 
-  slotDefs.forEach((def, i) => {
-    const p    = xi[i];
-    const clr  = roleClr[def.label];
+  for (let i = 0; i < 11; i++) {
+    const p = xi[i];
+    const playerRole = p ? (p.role === 'WK-Batter' ? 'WK' : p.role === 'Batter' ? 'BAT' : p.role === 'All-Rounder' ? 'AR' : 'BOWL') : null;
+    const clr = playerRole ? roleClr[playerRole] : '#4B5563';
+    const icon = playerRole ? (playerRole === 'WK' ? '🧤' : playerRole === 'BAT' ? '🏏' : playerRole === 'AR' ? '⚡' : '🎯') : '👤';
+    const roleLbl = playerRole ? playerRole : `Slot ${i + 1}`;
+
     const card = document.createElement('div');
     card.className = `xi-card ${p ? 'xi-card-filled' : ''}`;
     card.style.setProperty('--role-clr', clr);
@@ -3339,7 +3502,7 @@ function updatePlayingXIUI(squad, team) {
       const photoUrl = getPlayerPhotoUrl ? getPlayerPhotoUrl(p) : null;
       const initials = p.name.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
       card.innerHTML = `
-        <div class="xi-card-slot-lbl" style="background:${clr};color:#000;">${def.icon} ${def.label}</div>
+        <div class="xi-card-slot-lbl" style="background:${clr};color:#000;">${icon} ${roleLbl}</div>
         <div class="xi-card-photo">
           ${photoUrl
             ? `<img src="${photoUrl}" alt="${p.name}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
@@ -3354,16 +3517,16 @@ function updatePlayingXIUI(squad, team) {
       `;
     } else {
       card.innerHTML = `
-        <div class="xi-card-slot-lbl" style="background:${clr};color:#000;">${def.icon} ${def.label}</div>
+        <div class="xi-card-slot-lbl" style="background:${clr};color:#fff;">${icon} ${roleLbl}</div>
         <div class="xi-card-photo xi-card-empty-photo">
-          <span style="font-size:1.6rem;opacity:0.2;">${def.icon}</span>
+          <span style="font-size:1.6rem;opacity:0.2;">${icon}</span>
         </div>
-        <div class="xi-card-name xi-empty-name">${def.role}</div>
+        <div class="xi-card-name xi-empty-name">Slot ${i + 1}</div>
         <div class="xi-card-meta" style="color:rgba(255,255,255,0.2);font-size:0.65rem;">EMPTY SLOT</div>
       `;
     }
     grid.appendChild(card);
-  });
+  }
 }
 
 // Configuration Screen Handlers
@@ -3538,7 +3701,13 @@ joinLobbyBtn.onclick = async () => {
   joinLobbyBtn.disabled = true;
   joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting...';
   
-  await waitForSocketConnection();
+  const connected = await waitForSocketConnection();
+  if (!connected) {
+    alert("Unable to connect to the server. Please check your internet connection or try again after a few moments (the server might be starting up).");
+    joinLobbyBtn.disabled = false;
+    joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
+    return;
+  }
   initClientPeer(code, name, teamId, pin);
 };
 
@@ -3605,6 +3774,47 @@ if (_roomParam) {
       guestPinInput.value = _pinParam;
       guestPinGroup.style.display = 'block';
     }
+
+    // Fetch room status to disable taken teams and select first available franchise
+    (async () => {
+      try {
+        const res = await fetch(`${serverUrl}/api/room/${encodeURIComponent(_roomParam)}`);
+        if (res.ok) {
+          const roomData = await res.json();
+          if (roomData.exists && roomData.takenTeamIds) {
+            // Find first available team ID
+            let firstAvailableTeamId = 0;
+            while (firstAvailableTeamId < 10 && roomData.takenTeamIds.includes(firstAvailableTeamId)) {
+              firstAvailableTeamId++;
+            }
+            if (firstAvailableTeamId < 10) {
+              userTeamId = firstAvailableTeamId;
+              userTeamSelect.value = firstAvailableTeamId.toString();
+            }
+            renderFranchiseSelectorGrid(roomData.takenTeamIds);
+
+            // Auto-join if not private or PIN is provided in URL
+            if (!roomData.requiresPin || _pinParam) {
+              const name = welcomeNameInput.value.trim() || ("Guest_" + Math.floor(1000 + Math.random() * 9000));
+              welcomeNameInput.value = name;
+              
+              joinLobbyBtn.disabled = true;
+              joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Auto-joining Room...';
+              
+              const connected = await waitForSocketConnection();
+              if (connected) {
+                initClientPeer(_roomParam, name, userTeamId, _pinParam || '');
+              } else {
+                joinLobbyBtn.disabled = false;
+                joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Unable to query room details from server:', err);
+      }
+    })();
   }
 }
 

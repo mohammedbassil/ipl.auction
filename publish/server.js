@@ -46,12 +46,14 @@ app.get('/api/room/:roomId', (req, res) => {
   }
 
   const origin = `${req.protocol}://${req.get('host')}`;
+  const takenTeamIds = Object.values(room.clients).map(c => c.teamId);
   res.json({
     exists: true,
     roomId: room.id,
     isPrivate: room.isPrivate,
     requiresPin: room.isPrivate,
     clientCount: Object.keys(room.clients).length,
+    takenTeamIds,
     hostConnected: !!io.sockets.sockets.get(room.hostSocketId),
     joinUrl: `${origin}/?room=${room.id}`,
     privateJoinUrl: room.isPrivate ? `${origin}/?room=${room.id}&pin=${room.pin}` : null
@@ -213,6 +215,28 @@ io.on('connection', (socket) => {
   socket.on('host-broadcast', ({ roomId, data }) => {
     // We send to all sockets in roomId room except the sender (the host)
     socket.to(roomId).emit('client-receive-message', { data });
+  });
+
+  // 6. Client requests to change team
+  socket.on('change-team', ({ roomId, teamId }) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    // Check if this team is already taken by another client in the room
+    const isTaken = Object.entries(room.clients).some(
+      ([sid, client]) => sid !== socket.id && client.teamId === teamId
+    );
+
+    if (isTaken) {
+      socket.emit('change-team-ack', { success: false, error: 'Franchise is already selected by another user!' });
+      return;
+    }
+
+    if (room.clients[socket.id]) {
+      room.clients[socket.id].teamId = teamId;
+      socket.emit('change-team-ack', { success: true, teamId });
+      sendLobbyUpdate(roomId);
+    }
   });
 
   // Handle socket disconnects

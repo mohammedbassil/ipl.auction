@@ -45,7 +45,7 @@
           </div>
           <div class="feature-item">
             <span class="feature-item-title"><i class="fa-solid fa-users" style="color: var(--accent-gold);"></i> Squad Constraints</span>
-            <span class="feature-item-desc">Build a squad of 18-25 players, with a maximum of 8 overseas players. Formulate a valid XI with at least 7 Indian players.</span>
+            <span class="feature-item-desc">Build a squad of up to 25 players, with a maximum of 8 overseas players. Form your final XI via drag-and-drop from the squad list.</span>
           </div>
           <div class="feature-item">
             <span class="feature-item-title"><i class="fa-solid fa-robot" style="color: var(--accent-gold);"></i> Dynamic AI Bidding</span>
@@ -217,7 +217,7 @@
       <div>
         <span style="color: var(--text-secondary); font-size: 0.95rem;">
           <i class="fa-solid fa-circle-info" style="color: var(--accent-gold);"></i> 
-          <strong>Retention Cost Schedule:</strong> Capped players: 1st (₹18Cr), 2nd (₹14Cr), 3rd (₹11Cr). Uncapped: ₹4Cr each. Max 3 retentions, max 3 capped, max 2 uncapped.
+          <strong>Retention Cost Schedule:</strong> 1st Player (₹16Cr), 2nd Player (₹12Cr), 3rd Player (₹8Cr). Max 3 retentions per team. Retaining fewer players grants more RTM cards.
         </span>
       </div>
       <button class="btn btn-primary" id="confirm-retentions-btn" style="padding: 1rem 2rem; font-size: 1.1rem;">
@@ -507,7 +507,17 @@
 
       <!-- Tab panels -->
       <div class="squad-tab-content" id="squad-tab-xi">
-        <div class="xi-cards-grid" id="playing-xi-slots-grid"></div>
+        <div class="xi-builder-row">
+          <div class="xi-cards-grid" id="playing-xi-slots-grid"></div>
+          <div class="xi-drag-source-panel">
+            <div class="xi-source-header">
+              <div><strong>Squad Pool</strong></div>
+              <div class="xi-source-note">Drag players from here into any slot to choose your final XI.</div>
+            </div>
+            <div class="squad-list-grid xi-source-list" id="xi-squad-draggable-pool"></div>
+            <button class="btn btn-secondary" id="xi-reset-btn" type="button">Reset XI Selection</button>
+          </div>
+        </div>
         <div class="xi-validation-bar" id="playing-xi-validation-status">
           Select a team to see their Playing XI
         </div>
