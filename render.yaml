@@ -3,7 +3,7 @@ services:
     name: ipl-auction-server
     env: node
     plan: free
-    root: publish
     buildCommand: npm install
     startCommand: npm start
     autoDeploy: true
+
