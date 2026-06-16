@@ -1233,7 +1233,12 @@ function handleStateSync(state) {
     selectedRetentions[tid] = new Set(state.selectedRetentions[tid]);
   }
 
-  // Toggle speed control UI for guest clients
+  // Toggle speed control UI and host-only actions for guest clients
+  const confirmBtn = document.getElementById('confirm-retentions-btn');
+  const autoRetainBtn = document.getElementById('auto-retain-all-btn');
+  const resetRetBtn = document.getElementById('reset-retentions-btn');
+  const waitMsg = document.getElementById('guest-retention-wait-message');
+
   if (isMultiplayer && !isHost) {
     speedNormalBtn.disabled = true;
     speedFastBtn.disabled = true;
@@ -1242,6 +1247,11 @@ function handleStateSync(state) {
     autoAdvanceCheck.disabled = true;
     timerLimitSelectActive.disabled = true;
     hostActionsRow.style.display = 'none';
+
+    if (confirmBtn) confirmBtn.style.display = 'none';
+    if (autoRetainBtn) autoRetainBtn.style.display = 'none';
+    if (resetRetBtn) resetRetBtn.style.display = 'none';
+    if (waitMsg) waitMsg.style.display = 'inline-flex';
   } else {
     speedNormalBtn.disabled = false;
     speedFastBtn.disabled = false;
@@ -1250,6 +1260,15 @@ function handleStateSync(state) {
     autoAdvanceCheck.disabled = false;
     timerLimitSelectActive.disabled = false;
     hostActionsRow.style.display = 'flex';
+
+    if (confirmBtn) confirmBtn.style.display = 'inline-flex';
+    if (autoRetainBtn) autoRetainBtn.style.display = 'inline-flex';
+    if (resetRetBtn) resetRetBtn.style.display = 'inline-flex';
+    if (waitMsg) waitMsg.style.display = 'none';
+  }
+
+  if (startMultiplayerBtn) {
+    startMultiplayerBtn.style.display = (isMultiplayer && isHost && phase === 'setup') ? 'block' : 'none';
   }
 
   if (phase === 'setup') {
