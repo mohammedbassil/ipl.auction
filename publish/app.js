@@ -132,7 +132,10 @@ const serverUrl = (() => {
   return window.location.origin;
 })();
 
-const socket = io(serverUrl, { autoConnect: true });
+const socket = io(serverUrl, { 
+  autoConnect: true,
+  transports: ['websocket', 'polling']
+});
 
 // ── Shareable base URL (fetched from server so LAN IP is correct) ──────────
 let shareBaseUrl = serverUrl;   // fallback — overridden below
@@ -3821,57 +3824,89 @@ if (_roomParam) {
       startRetentionBtn.style.display = 'none';
       createRoomBtn.style.display = 'none';
       guestInvitePanel.style.display = 'block';
+      
+      joinLobbyBtn.disabled = true;
+      joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Checking room status...';
+      
       inviteLobbyText.innerHTML = `
         <div style="margin-bottom:0.5rem;">You've been invited to join an IPL Auction room!</div>
         <div style="font-family:monospace;color:#fff;background:rgba(0,0,0,0.3);padding:0.4rem 0.8rem;border-radius:6px;font-size:0.95rem;">
           Room: <strong>${_roomParam}</strong>
         </div>`;
 
-    if (_pinParam) {
-      guestPinInput.value = _pinParam;
-      guestPinGroup.style.display = 'block';
-    }
+      if (_pinParam) {
+        guestPinInput.value = _pinParam;
+        guestPinGroup.style.display = 'block';
+      }
 
-    // Fetch room status to disable taken teams and select first available franchise
-    (async () => {
-      try {
-        const res = await fetch(`${serverUrl}/api/room/${encodeURIComponent(_roomParam)}`);
-        if (res.ok) {
-          const roomData = await res.json();
-          if (roomData.exists && roomData.takenTeamIds) {
-            // Find first available team ID
-            let firstAvailableTeamId = 0;
-            while (firstAvailableTeamId < 10 && roomData.takenTeamIds.includes(firstAvailableTeamId)) {
-              firstAvailableTeamId++;
-            }
-            if (firstAvailableTeamId < 10) {
-              userTeamId = firstAvailableTeamId;
-              userTeamSelect.value = firstAvailableTeamId.toString();
-            }
-            renderFranchiseSelectorGrid(roomData.takenTeamIds);
+      // Detect if it takes too long to query the server (indicates Render spin-down / cold start)
+      const coldStartTimer = setTimeout(() => {
+        joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Waking up server (Render Cold Start)...';
+        inviteLobbyText.innerHTML += `
+          <div id="render-wakeup-info" style="margin-top:0.8rem; font-size:0.82rem; color:var(--accent-gold); line-height:1.4; animation: pulse 2s infinite alternate;">
+            ℹ️ The server is currently sleeping on Render's free tier. Waking it up can take 40-60 seconds. Please keep this tab open!
+          </div>`;
+      }, 2000);
 
-            // Auto-join if not private or PIN is provided in URL
-            if (!roomData.requiresPin || _pinParam) {
-              const name = welcomeNameInput.value.trim() || ("Guest_" + Math.floor(1000 + Math.random() * 9000));
-              welcomeNameInput.value = name;
-              
-              joinLobbyBtn.disabled = true;
-              joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Auto-joining Room...';
-              
-              const connected = await waitForSocketConnection();
-              if (connected) {
-                initClientPeer(_roomParam, name, userTeamId, _pinParam || '');
+      // Fetch room status to disable taken teams and select first available franchise
+      (async () => {
+        try {
+          const res = await fetch(`${serverUrl}/api/room/${encodeURIComponent(_roomParam)}`);
+          clearTimeout(coldStartTimer);
+          const infoEl = document.getElementById('render-wakeup-info');
+          if (infoEl) infoEl.remove();
+
+          if (res.ok) {
+            const roomData = await res.json();
+            if (roomData.exists && roomData.takenTeamIds) {
+              // Find first available team ID
+              let firstAvailableTeamId = 0;
+              while (firstAvailableTeamId < 10 && roomData.takenTeamIds.includes(firstAvailableTeamId)) {
+                firstAvailableTeamId++;
+              }
+              if (firstAvailableTeamId < 10) {
+                userTeamId = firstAvailableTeamId;
+                userTeamSelect.value = firstAvailableTeamId.toString();
+              }
+              renderFranchiseSelectorGrid(roomData.takenTeamIds);
+
+              // Auto-join if not private or PIN is provided in URL
+              if (!roomData.requiresPin || _pinParam) {
+                const name = welcomeNameInput.value.trim() || ("Guest_" + Math.floor(1000 + Math.random() * 9000));
+                welcomeNameInput.value = name;
+                
+                joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Auto-joining Room...';
+                
+                const connected = await waitForSocketConnection();
+                if (connected) {
+                  initClientPeer(_roomParam, name, userTeamId, _pinParam || '');
+                } else {
+                  joinLobbyBtn.disabled = false;
+                  joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
+                }
               } else {
                 joinLobbyBtn.disabled = false;
                 joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
               }
+            } else {
+              joinLobbyBtn.disabled = false;
+              joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
+              alert("Room does not exist anymore. Please check the link or create a new room.");
             }
+          } else {
+            joinLobbyBtn.disabled = false;
+            joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
+            alert("Room not found! Ensure the host is active.");
           }
+        } catch (err) {
+          clearTimeout(coldStartTimer);
+          const infoEl = document.getElementById('render-wakeup-info');
+          if (infoEl) infoEl.remove();
+          console.warn('Unable to query room details from server:', err);
+          joinLobbyBtn.disabled = false;
+          joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
         }
-      } catch (err) {
-        console.warn('Unable to query room details from server:', err);
-      }
-    })();
+      })();
     }
   }
 }

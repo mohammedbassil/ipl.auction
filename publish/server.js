@@ -36,6 +36,10 @@ app.get('/api/server-info', (req, res) => {
   });
 });
 
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
+
 app.get('/api/room/:roomId', (req, res) => {
   const room = rooms[req.params.roomId];
   if (!room) {
