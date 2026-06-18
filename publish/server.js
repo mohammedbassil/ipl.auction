@@ -26,7 +26,7 @@ app.use(express.static(__dirname));
 
 // API: return server's own origin so frontend builds correct room links
 app.get('/api/server-info', (req, res) => {
-  const origin = `${req.protocol}://${req.get('host')}`;
+  const origin = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
   const lan = getLanIp();
   res.json({
     origin,
@@ -45,7 +45,7 @@ app.get('/api/room/:roomId', (req, res) => {
     });
   }
 
-  const origin = `${req.protocol}://${req.get('host')}`;
+  const origin = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
   const takenTeamIds = Object.values(room.clients).map(c => c.teamId);
   res.json({
     exists: true,

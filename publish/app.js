@@ -603,9 +603,13 @@ function handleClientMessage(data) {
       clientWaitMessage.style.display = 'block';
       const roomId = extractRoomIdFromSearch(window.location.search);
       const pin = extractPinFromSearch(window.location.search);
-      document.getElementById('lobby-link-input').value = buildRoomLink(roomId, pin);
+      const link = buildRoomLink(roomId, pin);
+      document.getElementById('lobby-link-input').value = link;
       logActivity('bid', `Successfully joined lobby! Waiting for host to start retentions...`);
       
+      // Update host/guest URL
+      window.history.replaceState({ roomId }, '', link);
+
       saveRoomToHistory(roomId, false);
     } else {
       alert(`Failed to join lobby: ${data.error}`);
@@ -1038,6 +1042,9 @@ async function initHostPeer() {
     }
     document.getElementById('lobby-link-input').value = link;
     
+    // Update the browser URL with room parameters so that refreshing or sharing the address bar works
+    window.history.replaceState({ roomId: id }, '', link);
+    
     const hName = welcomeNameInput.value.trim() || 'Host';
     clientPlayers = [{
       peerId: socket.id,
@@ -1076,17 +1083,22 @@ function resumeHostLobby(roomId) {
 
   myPeerId = roomId;
 
+  let link;
   if (isPrivateRoom) {
     lobbyPrivacyBadge.innerHTML = '<i class="fa-solid fa-lock" style="color: var(--accent-gold)"></i> Private';
     lobbyPinDisplayGroup.style.display = 'block';
     lobbyPinValue.textContent = hostRoomPin;
-    document.getElementById('lobby-link-input').value = buildRoomLink(roomId, hostRoomPin);
+    link = buildRoomLink(roomId, hostRoomPin);
   } else {
     lobbyPrivacyBadge.innerHTML = '<i class="fa-solid fa-globe" style="color: var(--accent-gold)"></i> Public';
     lobbyPinDisplayGroup.style.display = 'none';
     lobbyPinValue.textContent = '-';
-    document.getElementById('lobby-link-input').value = buildRoomLink(roomId, '');
+    link = buildRoomLink(roomId, '');
   }
+  document.getElementById('lobby-link-input').value = link;
+
+  // Update the browser URL with room parameters so that refreshing or sharing the address bar works
+  window.history.replaceState({ roomId }, '', link);
   
   updateLobbyPlayersUI();
   saveRoomToHistory(roomId, true);
@@ -3780,14 +3792,32 @@ if (_roomParam) {
     const correctUrl = `http://${window.location.hostname}:3000/?room=${encodeURIComponent(_roomParam)}${_pinParam ? '&pin=' + encodeURIComponent(_pinParam) : ''}`;
     window.location.replace(correctUrl);
   } else {
-    startRetentionBtn.style.display = 'none';
-    createRoomBtn.style.display = 'none';
-    guestInvitePanel.style.display = 'block';
-    inviteLobbyText.innerHTML = `
-      <div style="margin-bottom:0.5rem;">You've been invited to join an IPL Auction room!</div>
-      <div style="font-family:monospace;color:#fff;background:rgba(0,0,0,0.3);padding:0.4rem 0.8rem;border-radius:6px;font-size:0.95rem;">
-        Room: <strong>${_roomParam}</strong>
-      </div>`;
+    // Auto-resume if the user was the host of this room in history
+    const historyStr = localStorage.getItem(LOCAL_STORAGE_HISTORY_KEY);
+    let history = [];
+    if (historyStr) {
+      try {
+        history = JSON.parse(historyStr);
+      } catch(e) {}
+    }
+    const matchedRoom = history.find(item => item.roomId === _roomParam);
+    if (matchedRoom && matchedRoom.isHost) {
+      welcomeNameInput.value = matchedRoom.userName;
+      userTeamId = matchedRoom.teamId;
+      userTeamSelect.value = matchedRoom.teamId.toString();
+      renderFranchiseSelectorGrid();
+      isMultiplayer = true;
+      isHost = true;
+      resumeHostLobby(_roomParam);
+    } else {
+      startRetentionBtn.style.display = 'none';
+      createRoomBtn.style.display = 'none';
+      guestInvitePanel.style.display = 'block';
+      inviteLobbyText.innerHTML = `
+        <div style="margin-bottom:0.5rem;">You've been invited to join an IPL Auction room!</div>
+        <div style="font-family:monospace;color:#fff;background:rgba(0,0,0,0.3);padding:0.4rem 0.8rem;border-radius:6px;font-size:0.95rem;">
+          Room: <strong>${_roomParam}</strong>
+        </div>`;
 
     if (_pinParam) {
       guestPinInput.value = _pinParam;
@@ -3834,6 +3864,7 @@ if (_roomParam) {
         console.warn('Unable to query room details from server:', err);
       }
     })();
+    }
   }
 }
 
