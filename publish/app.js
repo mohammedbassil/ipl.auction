@@ -298,6 +298,8 @@ socket.on('host-disconnected-warning', () => {
 
 socket.on('connect_error', (err) => {
   console.error('Socket connection error:', err.message);
+  joinLobbyBtn.disabled = false;
+  joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
 });
 
 
@@ -990,6 +992,7 @@ function syncStateToClients() {
 // Host: create room on server and set up lobby UI
 async function waitForSocketConnection() {
   if (socket.connected) return true;
+  socket.connect();
   return new Promise((resolve) => {
     const onConnect = () => {
       cleanup();
@@ -997,6 +1000,8 @@ async function waitForSocketConnection() {
     };
     const onConnectError = (err) => {
       console.warn('Socket connection error while waiting:', err);
+      cleanup();
+      resolve(false);
     };
     socket.on('connect', onConnect);
     socket.on('connect_error', onConnectError);
@@ -1009,7 +1014,7 @@ async function waitForSocketConnection() {
     setTimeout(() => {
       cleanup();
       resolve(socket.connected);
-    }, 15000);
+    }, 4000);
   });
 }
 
@@ -1221,6 +1226,7 @@ function handleStateSync(state) {
     startClientLocalTimer();
   }
 
+  const orderedPlayers = [];
   state.players.forEach(sp => {
     const local = players.find(p => p.id === sp.id);
     if (local) {
@@ -1228,8 +1234,10 @@ function handleStateSync(state) {
       local.soldPriceLakhs = sp.soldPriceLakhs;
       local.boughtBy = sp.boughtBy;
       local.isRtm = sp.isRtm;
+      orderedPlayers.push(local);
     }
   });
+  players = orderedPlayers;
 
   state.franchises.forEach(sf => {
     const local = franchises.find(f => f.id === sf.id);
@@ -3762,7 +3770,7 @@ shareLobbyBtn.onclick = async () => {
     try {
       await navigator.share({
         title: 'IPL Mega Auction Lobby',
-        text: `Join my IPL Mega Auction room!\n${link}`,
+        text: 'Join my IPL Mega Auction room!',
         url: link
       });
     } catch (e) {
