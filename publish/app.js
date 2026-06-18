@@ -3750,7 +3750,7 @@ shareLobbyBtn.onclick = async () => {
     try {
       await navigator.share({
         title: 'IPL Mega Auction Lobby',
-        text: 'Join my IPL Mega Auction room!',
+        text: `Join my IPL Mega Auction room!\n${link}`,
         url: link
       });
     } catch (e) {
