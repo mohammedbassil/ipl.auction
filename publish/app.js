@@ -993,31 +993,65 @@ function syncStateToClients() {
 }
 
 // Host: create room on server and set up lobby UI
-async function waitForSocketConnection() {
+async function waitForSocketConnection(timeoutMs = 60000) {
   if (socket.connected) return true;
   socket.connect();
   return new Promise((resolve) => {
+    let secondsElapsed = 0;
+    
+    const updateProgress = () => {
+      const joinBtn = document.getElementById('join-lobby-btn');
+      const createBtn = document.getElementById('create-room-btn');
+      
+      const statusText = secondsElapsed > 2
+        ? `<i class="fa-solid fa-spinner fa-spin"></i> Waking up server (${secondsElapsed}s / 60s)...`
+        : `<i class="fa-solid fa-spinner fa-spin"></i> Connecting (${secondsElapsed}s)...`;
+        
+      if (joinBtn && joinBtn.disabled) {
+        joinBtn.innerHTML = statusText;
+      }
+      if (createBtn && createBtn.disabled) {
+        createBtn.innerHTML = statusText;
+      }
+    };
+    
+    updateProgress();
+    const uiInterval = setInterval(() => {
+      secondsElapsed++;
+      updateProgress();
+    }, 1000);
+
     const onConnect = () => {
       cleanup();
       resolve(true);
     };
+    
     const onConnectError = (err) => {
-      console.warn('Socket connection error while waiting:', err);
-      cleanup();
-      resolve(false);
+      console.warn('Socket connection error (still waiting/retrying):', err.message || err);
     };
+
     socket.on('connect', onConnect);
     socket.on('connect_error', onConnectError);
     
     const cleanup = () => {
+      clearInterval(uiInterval);
       socket.off('connect', onConnect);
       socket.off('connect_error', onConnectError);
+      
+      const joinBtn = document.getElementById('join-lobby-btn');
+      const createBtn = document.getElementById('create-room-btn');
+      if (joinBtn && (joinBtn.innerHTML.includes('Connecting') || joinBtn.innerHTML.includes('Waking up'))) {
+        joinBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
+      }
+      if (createBtn && (createBtn.innerHTML.includes('Connecting') || createBtn.innerHTML.includes('Waking up'))) {
+        createBtn.innerHTML = '<i class="fa-solid fa-people-group"></i> Create a Room';
+      }
     };
 
     setTimeout(() => {
       cleanup();
       resolve(socket.connected);
-    }, 4000);
+    }, timeoutMs);
   });
 }
 
@@ -3680,13 +3714,28 @@ resetAuctionBtn.onclick = () => {
 
 // Create Room Button
 createRoomBtn.onclick = async () => {
+  const originalText = createRoomBtn.innerHTML;
+  createRoomBtn.disabled = true;
+  createRoomBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting...';
+
+  // Set multiplayer state
   isMultiplayer = true;
   isHost = true;
   simulationMode = 'franchise';
   userTeamId = parseInt(userTeamSelect.value);
   timeLimitSeconds = parseInt(timerLimitSelect.value);
   timerSeconds = timeLimitSeconds;
-  
+
+  const connected = await waitForSocketConnection();
+  if (!connected) {
+    alert("Unable to connect to the server. The server might be starting up or offline. Please try again in a few moments.");
+    createRoomBtn.disabled = false;
+    createRoomBtn.innerHTML = originalText;
+    isMultiplayer = false;
+    isHost = false;
+    return;
+  }
+
   // Hide action buttons, show lobby details
   startRetentionBtn.style.display = 'none';
   createRoomBtn.style.display = 'none';
@@ -3695,6 +3744,8 @@ createRoomBtn.onclick = async () => {
   clientWaitMessage.style.display = 'none';
 
   await initHostPeer();
+  createRoomBtn.disabled = false;
+  createRoomBtn.innerHTML = originalText;
 };
 
 // Start Multiplayer Button (Host only)
@@ -3875,6 +3926,7 @@ if (_roomParam) {
                 const name = welcomeNameInput.value.trim() || ("Guest_" + Math.floor(1000 + Math.random() * 9000));
                 welcomeNameInput.value = name;
                 
+                joinLobbyBtn.disabled = true;
                 joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Auto-joining Room...';
                 
                 const connected = await waitForSocketConnection();

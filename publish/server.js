@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
@@ -302,3 +303,26 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`║  For internet play: run  npx localtunnel --port ${PORT}  ║`);
   console.log(`╚══════════════════════════════════════════════════════╝\n`);
 });
+
+// ── Keep-Alive / Self-Ping Routine (To prevent Render Free Tier from sleeping) ──
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
+if (RENDER_URL) {
+  const intervalMs = 10 * 60 * 1000; // 10 minutes
+  console.log(`[Keep-Alive] Initializing self-ping to ${RENDER_URL} every 10 minutes.`);
+  setInterval(() => {
+    try {
+      const url = `${RENDER_URL.replace(/\/$/, '')}/ping`;
+      const client = url.startsWith('https') ? https : http;
+      console.log(`[Keep-Alive] Sending self-ping to keep server awake: ${url}`);
+      client.get(url, (res) => {
+        console.log(`[Keep-Alive] Self-ping successful. Status Code: ${res.statusCode}`);
+      }).on('error', (err) => {
+        console.warn(`[Keep-Alive] Self-ping request failed: ${err.message}`);
+      });
+    } catch (e) {
+      console.warn(`[Keep-Alive] Error in self-ping routine: ${e.message}`);
+    }
+  }, intervalMs);
+} else {
+  console.log('[Keep-Alive] RENDER_EXTERNAL_URL is not set. Self-ping keep-alive is inactive.');
+}
