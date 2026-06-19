@@ -129,7 +129,13 @@
 
         <!-- Multiplayer Lobby Status Panel (For Host/Guest connected) -->
         <div id="lobby-status-container" style="display: none; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 1.2rem; border-radius: 12px; margin-top: 1.5rem; border-left: 4px solid var(--accent-gold);">
-          <h4 style="font-size: 0.95rem; color: var(--accent-gold); margin-bottom: 0.8rem; font-family: Space Grotesk; letter-spacing: 0.5px;">LOBBY DETAILS</h4>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+            <h4 style="font-size: 0.95rem; color: var(--accent-gold); margin: 0; font-family: Space Grotesk; letter-spacing: 0.5px;">LOBBY DETAILS</h4>
+            <div id="connection-status-badge" style="font-size: 0.8rem; font-weight: 700; color: #fff; background: rgba(0,0,0,0.4); padding: 0.2rem 0.6rem; border-radius: 20px; border: 1px solid var(--border-color); display: flex; align-items: center; gap: 0.4rem;">
+              <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #f59e0b; box-shadow: 0 0 8px #f59e0b;" id="connection-status-dot"></span>
+              <span id="connection-status-text">Connecting...</span>
+            </div>
+          </div>
 
           <!-- Network mode selector -->
           <div id="network-guide" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.8rem; margin-bottom: 1rem; font-size: 0.82rem;">

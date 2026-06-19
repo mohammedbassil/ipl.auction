@@ -162,6 +162,7 @@ io.on('connection', (socket) => {
     }
 
     // Check if team is already controlled by another player
+    let assignedTeamId = teamId;
     const existingClientSocketId = Object.keys(room.clients).find(sid => room.clients[sid].teamId === teamId);
     if (existingClientSocketId) {
       const existingClient = room.clients[existingClientSocketId];
@@ -174,8 +175,19 @@ io.on('connection', (socket) => {
         }
         delete room.clients[existingClientSocketId];
       } else {
-        socket.emit('join-ack', { success: false, error: 'Franchise is already controlled by another player!' });
-        return;
+        // Auto-assign first available team ID instead of throwing an error
+        const takenTeamIds = Object.values(room.clients).map(c => c.teamId);
+        let firstAvailable = 0;
+        while (firstAvailable < 10 && takenTeamIds.includes(firstAvailable)) {
+          firstAvailable++;
+        }
+        if (firstAvailable < 10) {
+          console.log(`Team ${teamId} is taken. Auto-assigning guest ${playerName} to free team ${firstAvailable}`);
+          assignedTeamId = firstAvailable;
+        } else {
+          socket.emit('join-ack', { success: false, error: 'Room is full! All 10 franchises are controlled.' });
+          return;
+        }
       }
     }
 
@@ -185,11 +197,11 @@ io.on('connection', (socket) => {
     // Record guest client
     room.clients[socket.id] = {
       name: playerName,
-      teamId: teamId,
+      teamId: assignedTeamId,
       isHost: false
     };
 
-    socket.emit('join-ack', { success: true });
+    socket.emit('join-ack', { success: true, teamId: assignedTeamId });
     sendLobbyUpdate(roomId);
     
     // Notify host that a new guest joined so it can push current game state

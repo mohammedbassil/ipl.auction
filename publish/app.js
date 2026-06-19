@@ -115,6 +115,7 @@ let phase = "setup"; // 'setup' | 'retention' | 'auction' | 'finished'
 let autoAdvance = true;
 let hostRoomPin = "";
 let isPrivateRoom = false;
+let activeLobbySession = null; // { type: 'host'|'guest', roomId, pin, isPrivate, playerName, teamId }
 
 // ─────────────────────────────────────────────────────────────
 //  Socket.io – single shared connection to the Node.js server
@@ -211,6 +212,32 @@ function buildRoomLink(roomId, pin) {
 socket.on('connect', () => {
   console.log('Connected to server. Socket ID:', socket.id);
   myPeerId = socket.id;
+  updateConnectionBadge('connected');
+  
+  // Auto-register lobby session if active
+  if (activeLobbySession) {
+    if (activeLobbySession.type === 'host') {
+      socket.emit('host-create-room', {
+        roomId: activeLobbySession.roomId,
+        pin: activeLobbySession.pin,
+        isPrivate: activeLobbySession.isPrivate,
+        playerName: activeLobbySession.playerName,
+        teamId: activeLobbySession.teamId
+      });
+    } else if (activeLobbySession.type === 'guest') {
+      socket.emit('guest-join-room', {
+        roomId: activeLobbySession.roomId,
+        pin: activeLobbySession.pin,
+        playerName: activeLobbySession.playerName,
+        teamId: activeLobbySession.teamId
+      });
+    }
+  }
+});
+
+socket.on('disconnect', () => {
+  console.log('Socket disconnected from server.');
+  updateConnectionBadge('disconnected');
 });
 
 // ── Guest: receives any broadcast from the host (STATE_SYNC, TRIGGER_EFFECT, RTM_REQUEST …)
@@ -261,8 +288,8 @@ socket.on('change-team-ack', ({ success, teamId, error }) => {
 });
 
 // ── Guest: server tells guest whether the join was accepted or rejected
-socket.on('join-ack', ({ success, error }) => {
-  handleClientMessage({ type: 'JOIN_ACK', success, error });
+socket.on('join-ack', ({ success, teamId, error }) => {
+  handleClientMessage({ type: 'JOIN_ACK', success, teamId, error });
 });
 
 // ── Host: server confirms room was registered
@@ -300,10 +327,29 @@ socket.on('host-disconnected-warning', () => {
 });
 
 socket.on('connect_error', (err) => {
-  console.error('Socket connection error:', err.message);
-  joinLobbyBtn.disabled = false;
-  joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
+  console.error('Socket connection error:', err.message || err);
+  updateConnectionBadge('connecting');
 });
+
+function updateConnectionBadge(state) {
+  const dot = document.getElementById('connection-status-dot');
+  const text = document.getElementById('connection-status-text');
+  if (!dot || !text) return;
+  
+  if (state === 'connected') {
+    dot.style.backgroundColor = '#10b981'; // Green
+    dot.style.boxShadow = '0 0 8px #10b981';
+    text.textContent = 'Connected';
+  } else if (state === 'connecting') {
+    dot.style.backgroundColor = '#f59e0b'; // Yellow
+    dot.style.boxShadow = '0 0 8px #f59e0b';
+    text.textContent = 'Connecting...';
+  } else if (state === 'disconnected') {
+    dot.style.backgroundColor = '#ef4444'; // Red
+    dot.style.boxShadow = '0 0 8px #ef4444';
+    text.textContent = 'Disconnected';
+  }
+}
 
 
 // Sound Effects Generator (Web Audio API)
@@ -603,6 +649,14 @@ function handleClientMessage(data) {
     if (data.success) {
       isMultiplayer = true;
       isHost = false;
+      
+      // Handle auto-assigned team ID from server
+      if (data.teamId !== undefined) {
+        userTeamId = data.teamId;
+        userTeamSelect.value = data.teamId.toString();
+        renderFranchiseSelectorGrid();
+      }
+      
       guestInvitePanel.style.display = 'none';
       document.getElementById('lobby-status-container').style.display = 'block';
       clientWaitMessage.style.display = 'block';
@@ -618,6 +672,14 @@ function handleClientMessage(data) {
       saveRoomToHistory(roomId, false);
     } else {
       alert(`Failed to join lobby: ${data.error}`);
+      
+      // Reset active session and transition back to invite screen
+      activeLobbySession = null;
+      isMultiplayer = false;
+      guestInvitePanel.style.display = 'block';
+      document.getElementById('lobby-status-container').style.display = 'none';
+      clientWaitMessage.style.display = 'none';
+      
       joinLobbyBtn.disabled = false;
       joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
       
@@ -775,29 +837,42 @@ function rejoinRoom(item) {
   } else {
     isMultiplayer = true;
     isHost = false;
-    guestInvitePanel.style.display = 'block';
+    guestInvitePanel.style.display = 'none';
     startRetentionBtn.style.display = 'none';
     createRoomBtn.style.display = 'none';
-    inviteLobbyText.innerHTML = `Lobby Room: <strong style="font-family: monospace; color: #fff;">${item.roomId}</strong>`;
-    
+    lobbyStatusContainer.style.display = 'block';
+    clientWaitMessage.style.display = 'block';
+
+    const link = buildRoomLink(item.roomId, item.pin);
+    lobbyLinkInput.value = link;
+
+    lobbyPrivacyBadge.innerHTML = item.pin ? '<i class="fa-solid fa-lock" style="color: var(--accent-gold)"></i> Private' : '<i class="fa-solid fa-globe" style="color: var(--accent-gold)"></i> Public';
     if (item.pin) {
-      guestPinInput.value = item.pin;
-      guestPinGroup.style.display = 'block';
+      lobbyPinDisplayGroup.style.display = 'block';
+      lobbyPinValue.textContent = item.pin;
+    } else {
+      lobbyPinDisplayGroup.style.display = 'none';
     }
-    
-    joinLobbyBtn.disabled = true;
-    joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Reconnecting...';
-    
-    (async () => {
-      const connected = await waitForSocketConnection();
-      if (!connected) {
-        alert("Unable to reconnect to the server. Please check your internet connection and try again.");
-        joinLobbyBtn.disabled = false;
-        joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
-        return;
-      }
-      initClientPeer(item.roomId, item.userName, item.teamId, item.pin || '');
-    })();
+
+    // Set active guest session
+    activeLobbySession = {
+      type: 'guest',
+      roomId: item.roomId,
+      pin: item.pin || "",
+      playerName: item.userName,
+      teamId: item.teamId
+    };
+
+    if (socket.connected) {
+      socket.emit('guest-join-room', {
+        roomId: item.roomId,
+        pin: item.pin || "",
+        playerName: item.userName,
+        teamId: item.teamId
+      });
+    } else {
+      updateConnectionBadge('connecting');
+    }
   }
 }
 
@@ -992,124 +1067,7 @@ function syncStateToClients() {
   });
 }
 
-// Host: create room on server and set up lobby UI
-async function waitForSocketConnection(timeoutMs = 60000) {
-  if (socket.connected) return true;
-  socket.connect();
-  return new Promise((resolve) => {
-    let secondsElapsed = 0;
-    
-    const updateProgress = () => {
-      const joinBtn = document.getElementById('join-lobby-btn');
-      const createBtn = document.getElementById('create-room-btn');
-      
-      const statusText = secondsElapsed > 2
-        ? `<i class="fa-solid fa-spinner fa-spin"></i> Waking up server (${secondsElapsed}s / 60s)...`
-        : `<i class="fa-solid fa-spinner fa-spin"></i> Connecting (${secondsElapsed}s)...`;
-        
-      if (joinBtn && joinBtn.disabled) {
-        joinBtn.innerHTML = statusText;
-      }
-      if (createBtn && createBtn.disabled) {
-        createBtn.innerHTML = statusText;
-      }
-    };
-    
-    updateProgress();
-    const uiInterval = setInterval(() => {
-      secondsElapsed++;
-      updateProgress();
-    }, 1000);
 
-    const onConnect = () => {
-      cleanup();
-      resolve(true);
-    };
-    
-    const onConnectError = (err) => {
-      console.warn('Socket connection error (still waiting/retrying):', err.message || err);
-    };
-
-    socket.on('connect', onConnect);
-    socket.on('connect_error', onConnectError);
-    
-    const cleanup = () => {
-      clearInterval(uiInterval);
-      socket.off('connect', onConnect);
-      socket.off('connect_error', onConnectError);
-      
-      const joinBtn = document.getElementById('join-lobby-btn');
-      const createBtn = document.getElementById('create-room-btn');
-      if (joinBtn && (joinBtn.innerHTML.includes('Connecting') || joinBtn.innerHTML.includes('Waking up'))) {
-        joinBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
-      }
-      if (createBtn && (createBtn.innerHTML.includes('Connecting') || createBtn.innerHTML.includes('Waking up'))) {
-        createBtn.innerHTML = '<i class="fa-solid fa-people-group"></i> Create a Room';
-      }
-    };
-
-    setTimeout(() => {
-      cleanup();
-      resolve(socket.connected);
-    }, timeoutMs);
-  });
-}
-
-async function initHostPeer() {
-  await waitForSocketConnection();
-  const privacyVal = document.querySelector('input[name="room-privacy"]:checked').value;
-  isPrivateRoom = (privacyVal === 'private');
-  if (isPrivateRoom) {
-    hostRoomPin = Math.floor(1000 + Math.random() * 9000).toString();
-  } else {
-    hostRoomPin = "";
-  }
-
-  await resolveShareBaseUrl();
-
-  const localRoomId = 'room_' + Math.floor(100000 + Math.random() * 900000);
-  myPeerId = localRoomId;
-
-  const setupLobby = (id) => {
-    myPeerId = id;
-    const link = buildRoomLink(id, isPrivateRoom ? hostRoomPin : '');
-    if (isPrivateRoom) {
-      lobbyPrivacyBadge.innerHTML = '<i class="fa-solid fa-lock" style="color: var(--accent-gold)"></i> Private';
-      lobbyPinDisplayGroup.style.display = 'block';
-      lobbyPinValue.textContent = hostRoomPin;
-    } else {
-      lobbyPrivacyBadge.innerHTML = '<i class="fa-solid fa-globe" style="color: var(--accent-gold)"></i> Public';
-      lobbyPinDisplayGroup.style.display = 'none';
-      lobbyPinValue.textContent = '-';
-    }
-    document.getElementById('lobby-link-input').value = link;
-    
-    // Update the browser URL with room parameters so that refreshing or sharing the address bar works
-    window.history.replaceState({ roomId: id }, '', link);
-    
-    const hName = welcomeNameInput.value.trim() || 'Host';
-    clientPlayers = [{
-      peerId: socket.id,
-      name: `${hName} (Host)`,
-      teamId: userTeamId,
-      isHost: true
-    }];
-    updateLobbyPlayersUI();
-    saveRoomToHistory(id, true);
-    saveHostGameStateToLocalStorage();
-    logActivity('bid', `Multiplayer host lobby created. Room Code: <strong>${id}</strong>`);
-  };
-
-  setupLobby(localRoomId);
-
-  socket.emit('host-create-room', {
-      roomId: localRoomId,
-      pin: hostRoomPin,
-      isPrivate: isPrivateRoom,
-      playerName: welcomeNameInput.value.trim() || 'Host',
-      teamId: userTeamId
-    });
-}
 
 function resumeHostLobby(roomId) {
   const success = loadHostGameStateFromLocalStorage(roomId);
@@ -1170,16 +1128,28 @@ function resumeHostLobby(roomId) {
   }
   logActivity('bid', `Lobby state resumed. Room Code: <strong>${roomId}</strong>`);
 
-  (async () => {
-    await waitForSocketConnection();
+  // Set active host session
+  const hName = welcomeNameInput.value.trim() || 'Host';
+  activeLobbySession = {
+    type: 'host',
+    roomId: roomId,
+    pin: hostRoomPin,
+    isPrivate: isPrivateRoom,
+    playerName: hName + " (Host)",
+    teamId: userTeamId
+  };
+
+  if (socket.connected) {
     socket.emit('host-create-room', {
       roomId: roomId,
       pin: hostRoomPin,
       isPrivate: isPrivateRoom,
-      playerName: welcomeNameInput.value.trim() || 'Host',
+      playerName: hName + " (Host)",
       teamId: userTeamId
     });
-  })();
+  } else {
+    updateConnectionBadge('connecting');
+  }
 }
 
 
@@ -3713,12 +3683,7 @@ resetAuctionBtn.onclick = () => {
 };
 
 // Create Room Button
-createRoomBtn.onclick = async () => {
-  const originalText = createRoomBtn.innerHTML;
-  createRoomBtn.disabled = true;
-  createRoomBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting...';
-
-  // Set multiplayer state
+createRoomBtn.onclick = () => {
   isMultiplayer = true;
   isHost = true;
   simulationMode = 'franchise';
@@ -3726,15 +3691,25 @@ createRoomBtn.onclick = async () => {
   timeLimitSeconds = parseInt(timerLimitSelect.value);
   timerSeconds = timeLimitSeconds;
 
-  const connected = await waitForSocketConnection();
-  if (!connected) {
-    alert("Unable to connect to the server. The server might be starting up or offline. Please try again in a few moments.");
-    createRoomBtn.disabled = false;
-    createRoomBtn.innerHTML = originalText;
-    isMultiplayer = false;
-    isHost = false;
-    return;
-  }
+  // We instantly generate the roomId locally
+  const localRoomId = 'room_' + Math.floor(100000 + Math.random() * 900000);
+  myPeerId = localRoomId;
+
+  // Set the privacy and pin
+  const privacyVal = document.querySelector('input[name="room-privacy"]:checked').value;
+  isPrivateRoom = (privacyVal === 'private');
+  hostRoomPin = isPrivateRoom ? Math.floor(1000 + Math.random() * 9000).toString() : "";
+
+  // Set the active session object
+  const hName = welcomeNameInput.value.trim() || 'Host';
+  activeLobbySession = {
+    type: 'host',
+    roomId: localRoomId,
+    pin: hostRoomPin,
+    isPrivate: isPrivateRoom,
+    playerName: hName,
+    teamId: userTeamId
+  };
 
   // Hide action buttons, show lobby details
   startRetentionBtn.style.display = 'none';
@@ -3743,9 +3718,46 @@ createRoomBtn.onclick = async () => {
   startMultiplayerBtn.style.display = 'block';
   clientWaitMessage.style.display = 'none';
 
-  await initHostPeer();
-  createRoomBtn.disabled = false;
-  createRoomBtn.innerHTML = originalText;
+  if (isPrivateRoom) {
+    lobbyPrivacyBadge.innerHTML = '<i class="fa-solid fa-lock" style="color: var(--accent-gold)"></i> Private';
+    lobbyPinDisplayGroup.style.display = 'block';
+    lobbyPinValue.textContent = hostRoomPin;
+  } else {
+    lobbyPrivacyBadge.innerHTML = '<i class="fa-solid fa-globe" style="color: var(--accent-gold)"></i> Public';
+    lobbyPinDisplayGroup.style.display = 'none';
+    lobbyPinValue.textContent = '-';
+  }
+
+  // Resolve share URL and setup initial host lobby UI in the background
+  (async () => {
+    await resolveShareBaseUrl();
+    const link = buildRoomLink(localRoomId, isPrivateRoom ? hostRoomPin : '');
+    lobbyLinkInput.value = link;
+    window.history.replaceState({ roomId: localRoomId }, '', link);
+    
+    clientPlayers = [{
+      peerId: socket.id || 'connecting',
+      name: `${hName} (Host)`,
+      teamId: userTeamId,
+      isHost: true
+    }];
+    updateLobbyPlayersUI();
+    saveRoomToHistory(localRoomId, true);
+    saveHostGameStateToLocalStorage();
+  })();
+
+  // Trigger emit if socket is already connected, else wait for background connection
+  if (socket.connected) {
+    socket.emit('host-create-room', {
+      roomId: localRoomId,
+      pin: hostRoomPin,
+      isPrivate: isPrivateRoom,
+      playerName: hName + " (Host)",
+      teamId: userTeamId
+    });
+  } else {
+    updateConnectionBadge('connecting');
+  }
 };
 
 // Start Multiplayer Button (Host only)
@@ -3776,7 +3788,7 @@ startMultiplayerBtn.onclick = () => {
 };
 
 // Lobby Guest Join click binding
-joinLobbyBtn.onclick = async () => {
+joinLobbyBtn.onclick = () => {
   const name = welcomeNameInput.value.trim() || 'Guest';
   const code = extractRoomIdFromSearch(window.location.search);
   const teamId = parseInt(userTeamSelect.value);
@@ -3791,17 +3803,34 @@ joinLobbyBtn.onclick = async () => {
     return;
   }
   
-  joinLobbyBtn.disabled = true;
-  joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting...';
+  // Transition UI instantly to the lobby screen!
+  isMultiplayer = true;
+  isHost = false;
+  guestInvitePanel.style.display = 'none';
+  lobbyStatusContainer.style.display = 'block';
+  clientWaitMessage.style.display = 'block';
   
-  const connected = await waitForSocketConnection();
-  if (!connected) {
-    alert("Unable to connect to the server. Please check your internet connection or try again after a few moments (the server might be starting up).");
-    joinLobbyBtn.disabled = false;
-    joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
-    return;
+  const link = buildRoomLink(code, pin);
+  lobbyLinkInput.value = link;
+  window.history.replaceState({ roomId: code }, '', link);
+
+  // Set active guest session
+  activeLobbySession = {
+    type: 'guest',
+    roomId: code,
+    pin: pin,
+    playerName: name,
+    teamId: teamId
+  };
+
+  // Trigger emit if socket is already connected
+  if (socket.connected) {
+    socket.emit('guest-join-room', { roomId: code, pin, playerName: name, teamId });
+  } else {
+    updateConnectionBadge('connecting');
   }
-  initClientPeer(code, name, teamId, pin);
+
+  saveRoomToHistory(code, false);
 };
 
 // Clipboard copying link click binding
@@ -3872,93 +3901,47 @@ if (_roomParam) {
       isHost = true;
       resumeHostLobby(_roomParam);
     } else {
+      // Transition UI instantly to the guest lobby screen!
       startRetentionBtn.style.display = 'none';
       createRoomBtn.style.display = 'none';
-      guestInvitePanel.style.display = 'block';
-      
-      joinLobbyBtn.disabled = true;
-      joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Checking room status...';
-      
-      inviteLobbyText.innerHTML = `
-        <div style="margin-bottom:0.5rem;">You've been invited to join an IPL Auction room!</div>
-        <div style="font-family:monospace;color:#fff;background:rgba(0,0,0,0.3);padding:0.4rem 0.8rem;border-radius:6px;font-size:0.95rem;">
-          Room: <strong>${_roomParam}</strong>
-        </div>`;
+      guestInvitePanel.style.display = 'none';
+      lobbyStatusContainer.style.display = 'block';
+      clientWaitMessage.style.display = 'block';
 
+      const name = welcomeNameInput.value.trim() || ("Guest_" + Math.floor(1000 + Math.random() * 9000));
+      welcomeNameInput.value = name;
+
+      const link = buildRoomLink(_roomParam, _pinParam);
+      lobbyLinkInput.value = link;
+
+      lobbyPrivacyBadge.innerHTML = _pinParam ? '<i class="fa-solid fa-lock" style="color: var(--accent-gold)"></i> Private' : '<i class="fa-solid fa-globe" style="color: var(--accent-gold)"></i> Public';
       if (_pinParam) {
-        guestPinInput.value = _pinParam;
-        guestPinGroup.style.display = 'block';
+        lobbyPinDisplayGroup.style.display = 'block';
+        lobbyPinValue.textContent = _pinParam;
+      } else {
+        lobbyPinDisplayGroup.style.display = 'none';
       }
 
-      // Detect if it takes too long to query the server (indicates Render spin-down / cold start)
-      const coldStartTimer = setTimeout(() => {
-        joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Waking up server (Render Cold Start)...';
-        inviteLobbyText.innerHTML += `
-          <div id="render-wakeup-info" style="margin-top:0.8rem; font-size:0.82rem; color:var(--accent-gold); line-height:1.4; animation: pulse 2s infinite alternate;">
-            ℹ️ The server is currently sleeping on Render's free tier. Waking it up can take 40-60 seconds. Please keep this tab open!
-          </div>`;
-      }, 2000);
+      // Set active guest session
+      activeLobbySession = {
+        type: 'guest',
+        roomId: _roomParam,
+        pin: _pinParam || "",
+        playerName: name,
+        teamId: userTeamId
+      };
 
-      // Fetch room status to disable taken teams and select first available franchise
-      (async () => {
-        try {
-          const res = await fetch(`${serverUrl}/api/room/${encodeURIComponent(_roomParam)}`);
-          clearTimeout(coldStartTimer);
-          const infoEl = document.getElementById('render-wakeup-info');
-          if (infoEl) infoEl.remove();
-
-          if (res.ok) {
-            const roomData = await res.json();
-            if (roomData.exists && roomData.takenTeamIds) {
-              // Find first available team ID
-              let firstAvailableTeamId = 0;
-              while (firstAvailableTeamId < 10 && roomData.takenTeamIds.includes(firstAvailableTeamId)) {
-                firstAvailableTeamId++;
-              }
-              if (firstAvailableTeamId < 10) {
-                userTeamId = firstAvailableTeamId;
-                userTeamSelect.value = firstAvailableTeamId.toString();
-              }
-              renderFranchiseSelectorGrid(roomData.takenTeamIds);
-
-              // Auto-join if not private or PIN is provided in URL
-              if (!roomData.requiresPin || _pinParam) {
-                const name = welcomeNameInput.value.trim() || ("Guest_" + Math.floor(1000 + Math.random() * 9000));
-                welcomeNameInput.value = name;
-                
-                joinLobbyBtn.disabled = true;
-                joinLobbyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Auto-joining Room...';
-                
-                const connected = await waitForSocketConnection();
-                if (connected) {
-                  initClientPeer(_roomParam, name, userTeamId, _pinParam || '');
-                } else {
-                  joinLobbyBtn.disabled = false;
-                  joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
-                }
-              } else {
-                joinLobbyBtn.disabled = false;
-                joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
-              }
-            } else {
-              joinLobbyBtn.disabled = false;
-              joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
-              alert("Room does not exist anymore. Please check the link or create a new room.");
-            }
-          } else {
-            joinLobbyBtn.disabled = false;
-            joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
-            alert("Room not found! Ensure the host is active.");
-          }
-        } catch (err) {
-          clearTimeout(coldStartTimer);
-          const infoEl = document.getElementById('render-wakeup-info');
-          if (infoEl) infoEl.remove();
-          console.warn('Unable to query room details from server:', err);
-          joinLobbyBtn.disabled = false;
-          joinLobbyBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Connect & Join Room';
-        }
-      })();
+      // Trigger emit if socket is already connected, else wait for connect event
+      if (socket.connected) {
+        socket.emit('guest-join-room', {
+          roomId: _roomParam,
+          pin: _pinParam || "",
+          playerName: name,
+          teamId: userTeamId
+        });
+      } else {
+        updateConnectionBadge('connecting');
+      }
     }
   }
 }
