@@ -2,7 +2,7 @@
   "name": "ipl-mega-auction-simulator",
   "version": "1.0.0",
   "description": "IPL Mega Auction Simulator with centralized real-time room system.",
-  "main": "server.js",
+  "main": "publish/server.js",
   "scripts": {
     "start": "node publish/server.js"
   },
