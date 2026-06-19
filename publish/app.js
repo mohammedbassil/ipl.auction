@@ -134,8 +134,7 @@ const serverUrl = (() => {
 })();
 
 const socket = io(serverUrl, { 
-  autoConnect: true,
-  transports: ['websocket', 'polling']
+  autoConnect: true
 });
 
 // ── Shareable base URL (fetched from server so LAN IP is correct) ──────────
