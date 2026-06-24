@@ -455,3 +455,7 @@ function formatLakhs(lakhs) {
   if (lakhs >= 100) return `₹${(lakhs / 100).toFixed(2)} Cr`;
   return `₹${lakhs} L`;
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { FRANCHISES, PLAYERS, formatPurse, formatLakhs, getFormerTeam };
+}

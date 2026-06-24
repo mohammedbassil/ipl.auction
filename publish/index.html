@@ -8,7 +8,7 @@
   <!-- Add FontAwesome for icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- Add Socket.io Client for real-time multiplayer coordination -->
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 
@@ -572,6 +572,28 @@
 
   <!-- Balloon Celebration Overlay -->
   <div id="balloon-container"></div>
+
+  <!-- Firebase App (the core Firebase SDK - compat version for non-module script compatibility) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <!-- If you want to use Realtime Database or Firestore, uncomment these: -->
+  <!-- <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script> -->
+  <!-- <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script> -->
+
+  <script>
+    // Your web app's Firebase configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyAjg8gZ900vPoRnRsP9yV6Gam5-PVXJWcY",
+      authDomain: "ipl-auction-1b674.firebaseapp.com",
+      projectId: "ipl-auction-1b674",
+      storageBucket: "ipl-auction-1b674.firebasestorage.app",
+      messagingSenderId: "876232321877",
+      appId: "1:876232321877:web:e21912b7d77b8b96e45ddc"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    console.log("Firebase initialized successfully!");
+  </script>
 
   <script src="database.js"></script>
   <script src="app.js"></script>

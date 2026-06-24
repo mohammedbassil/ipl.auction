@@ -111,6 +111,7 @@ let isMultiplayer = false;
 let isHost = false;
 let clientPlayers = []; // Connected players list: { peerId, name, teamId, isHost }
 let myPeerId = "";
+let activeRoomId = ""; // Stable room ID — never overwritten by socket reconnects
 let phase = "setup"; // 'setup' | 'retention' | 'auction' | 'finished'
 let autoAdvance = true;
 let hostRoomPin = "";
@@ -210,12 +211,16 @@ function buildRoomLink(roomId, pin) {
 // Attach all event listeners once the socket connects (also fires on reconnect)
 socket.on('connect', () => {
   console.log('Connected to server. Socket ID:', socket.id);
-  myPeerId = socket.id;
+  myPeerId = socket.id; // socket ID — used only for peer-to-peer routing
   updateConnectionBadge('connected');
   
   // Auto-register lobby session if active
   if (activeLobbySession) {
     if (activeLobbySession.type === 'host') {
+      // FIX #1: Restore stable activeRoomId from session on reconnect
+      // (prevents myPeerId overwrite from breaking broadcast roomId)
+      activeRoomId = activeLobbySession.roomId;
+      myPeerId = activeLobbySession.roomId; // keep myPeerId consistent for host
       socket.emit('host-create-room', {
         roomId: activeLobbySession.roomId,
         pin: activeLobbySession.pin,
@@ -586,7 +591,9 @@ function sendToHost(msg) {
 
 // Helper for host: broadcast state to all guests via server relay
 function broadcast(msg) {
-  socket.emit('host-broadcast', { roomId: myPeerId, data: msg });
+  // FIX #1: Use activeRoomId (stable) instead of myPeerId (can be overwritten by socket.id on reconnect)
+  const roomId = activeRoomId || myPeerId;
+  socket.emit('host-broadcast', { roomId, data: msg });
 }
 
 function handleHostMessage(fromPeerId, data, replyFn) {
@@ -1081,6 +1088,7 @@ function resumeHostLobby(roomId) {
   }
 
   myPeerId = roomId;
+  activeRoomId = roomId; // FIX #1: Also set stable room ID on resume
 
   let link;
   if (isPrivateRoom) {
@@ -1222,14 +1230,19 @@ function handleStateSync(state) {
   simulationMode = state.simulationMode;
   clientPlayers = state.clientPlayers;
 
-  if (!isRtmPhase) {
-    rtmPromptModal.classList.remove('active');
-  }
+  // Removed top-level RTM check to handle it fully at the end
 
   // Guests must also be marked as multiplayer when receiving a STATE_SYNC
   if (!isHost) {
     isMultiplayer = true;
     startClientLocalTimer();
+  }
+
+  // FIX #2: Bootstrap guest player pool if empty — guests need full player data from PLAYERS constant
+  // The server only sends delta (id, status, price) — full metadata lives in the static PLAYERS DB
+  if (players.length === 0 && typeof PLAYERS !== 'undefined' && PLAYERS.length > 0) {
+    console.log('[STATE_SYNC] Guest player pool is empty — bootstrapping from PLAYERS database...');
+    initializePlayerPool();
   }
 
   const orderedPlayers = [];
@@ -1241,9 +1254,22 @@ function handleStateSync(state) {
       local.boughtBy = sp.boughtBy;
       local.isRtm = sp.isRtm;
       orderedPlayers.push(local);
+    } else {
+      // FIX #2: Fallback — find in PLAYERS constant and merge in status data
+      const base = (typeof PLAYERS !== 'undefined') && PLAYERS.find(p => p.id === sp.id);
+      if (base) {
+        orderedPlayers.push({
+          ...base,
+          status: sp.status,
+          soldPriceLakhs: sp.soldPriceLakhs,
+          boughtBy: sp.boughtBy,
+          isRtm: sp.isRtm
+        });
+      }
     }
   });
-  players = orderedPlayers;
+  // FIX #2: Only replace if we got data — don't wipe existing pool if merge yields nothing
+  if (orderedPlayers.length > 0) players = orderedPlayers;
 
   state.franchises.forEach(sf => {
     const local = franchises.find(f => f.id === sf.id);
@@ -1257,6 +1283,12 @@ function handleStateSync(state) {
   selectedRetentions = {};
   for (let tid in state.selectedRetentions) {
     selectedRetentions[tid] = new Set(state.selectedRetentions[tid]);
+  }
+  // FIX #2: Ensure all franchise slots exist even if not in server payload
+  if (franchises && franchises.length > 0) {
+    franchises.forEach(f => {
+      if (!selectedRetentions[f.id]) selectedRetentions[f.id] = new Set();
+    });
   }
 
   // Toggle speed control UI and host-only actions for guest clients
@@ -1300,22 +1332,49 @@ function handleStateSync(state) {
   if (phase === 'setup') {
     switchScreen('landing-screen');
     updateLobbyPlayersUI();
+    // FIX #6: Reassert guest waiting-room UI state when synced back to setup phase
+    if (isMultiplayer && !isHost) {
+      if (clientWaitMessage) clientWaitMessage.style.display = 'block';
+      if (startMultiplayerBtn) startMultiplayerBtn.style.display = 'none';
+    }
   } else if (phase === 'retention') {
-    switchScreen('retention-screen');
-    franchises.forEach(f => {
-      updateTeamRetentionCardUI(f.id);
-      const card = document.getElementById('retention-franchise-grid').children[f.id];
-      if (card) {
-        card.querySelectorAll('.candidate-row').forEach(row => {
-          const pId = parseInt(row.dataset.playerId);
-          if (selectedRetentions[f.id] && selectedRetentions[f.id].has(pId)) {
-            row.classList.add('selected');
-          } else {
-            row.classList.remove('selected');
-          }
-        });
-      }
-    });
+    // FIX #2 + #3: Auto-initialize guest retention grid if never rendered
+    const retentionGrid = document.getElementById('retention-franchise-grid');
+    if (retentionGrid && retentionGrid.children.length === 0 && franchises.length > 0) {
+      console.log('[STATE_SYNC] Guest retention grid not rendered — initializing now...');
+      switchScreen('retention-screen');
+      statusPhaseIndicator.style.display = 'inline-flex';
+      statusPhaseIndicator.textContent = 'RETENTION PHASE';
+      initRetentionScreen();
+      // Re-apply server retention selections after grid renders
+      franchises.forEach(f => {
+        const card = retentionGrid.children[f.id];
+        const teamSet = selectedRetentions[f.id];
+        if (card && teamSet) {
+          card.querySelectorAll('.candidate-row').forEach(row => {
+            const pId = parseInt(row.dataset.playerId);
+            row.classList.toggle('selected', teamSet.has(pId));
+          });
+          updateTeamRetentionCardUI(f.id);
+        }
+      });
+    } else {
+      switchScreen('retention-screen');
+      franchises.forEach(f => {
+        updateTeamRetentionCardUI(f.id);
+        const card = retentionGrid ? retentionGrid.children[f.id] : null;
+        if (card) {
+          card.querySelectorAll('.candidate-row').forEach(row => {
+            const pId = parseInt(row.dataset.playerId);
+            if (selectedRetentions[f.id] && selectedRetentions[f.id].has(pId)) {
+              row.classList.add('selected');
+            } else {
+              row.classList.remove('selected');
+            }
+          });
+        }
+      });
+    }
   } else if (phase === 'auction') {
     if (landingScreen.classList.contains('active') || retentionScreen.classList.contains('active')) {
       switchScreen('auction-screen');
@@ -1333,6 +1392,39 @@ function handleStateSync(state) {
     validateBidButtons();
   } else if (phase === 'finished') {
     endAuction();
+  }
+
+  // Authoritative server-synced RTM modal resolution
+  if (isRtmPhase) {
+    const player = players[activePoolIndex];
+    if (player) {
+      rtmPlayerName.textContent = player.name;
+      rtmPlayerDetails.textContent = `${player.country} • ${player.role}`;
+      rtmFormerTeamName.textContent = franchises[player.formerTeamId].short;
+      rtmHighestBidVal.textContent = formatLakhs(currentBidLakhs);
+      
+      const leaderTeam = franchises.find(f => f.id === currentHighestBidderId);
+      rtmHighestBidderName.textContent = leaderTeam ? leaderTeam.short : '-';
+
+      const isFormerTeamMine = (player.formerTeamId === userTeamId);
+      if (isFormerTeamMine) {
+        rtmActionButtonsBox.style.display = 'flex';
+        rtmAiThinking.style.display = 'none';
+      } else {
+        rtmActionButtonsBox.style.display = 'none';
+        rtmAiThinking.style.display = 'flex';
+        
+        const humanOwner = clientPlayers.find(p => p.teamId === player.formerTeamId);
+        if (humanOwner) {
+          rtmAiTeamName.textContent = `${franchises[player.formerTeamId].short} (${humanOwner.name})`;
+        } else {
+          rtmAiTeamName.textContent = `${franchises[player.formerTeamId].short} (AI)`;
+        }
+      }
+      rtmPromptModal.classList.add('active');
+    }
+  } else {
+    rtmPromptModal.classList.remove('active');
   }
 }
 
@@ -1589,16 +1681,13 @@ function getRetentionCostAndRtm(retainedList) {
 }
 
 function toggleRetention(teamId, playerId, rowElement) {
-  if (isMultiplayer && !isHost) {
-    if (teamId !== userTeamId) {
+  if (isMultiplayer) {
+    if (!isHost && teamId !== userTeamId) {
       alert("You cannot edit retentions for another franchise!");
       return;
     }
-    sendToHost({
-      type: 'TOGGLE_RETENTION',
-      teamId: teamId,
-      playerId: playerId
-    });
+    const roomId = isHost ? myPeerId : extractRoomIdFromSearch(window.location.search);
+    socket.emit('toggle-retention', { roomId, teamId, playerId });
     return;
   }
 
@@ -1620,14 +1709,11 @@ function toggleRetention(teamId, playerId, rowElement) {
   }
 
   updateTeamRetentionCardUI(teamId);
-
-  if (isHost) {
-    syncStateToClients();
-  }
 }
 
 function updateTeamRetentionCardUI(teamId) {
   const teamSet = selectedRetentions[teamId];
+  if (!teamSet) return; // FIX #3: Guard against uninitialized state (crashes guests who never called initRetentionScreen)
   const retainedList = Array.from(teamSet).map(id => PLAYERS.find(p => p.id === id));
   const stats = getRetentionCostAndRtm(retainedList);
   const purseLakhs = 12000 - stats.cost;
@@ -1638,8 +1724,13 @@ function updateTeamRetentionCardUI(teamId) {
 }
 
 function autoRetainAllAITeams() {
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('auto-retain-ai-teams', { roomId: myPeerId });
+    return;
+  }
+
   franchises.forEach(f => {
-    // In user mode, don't touch user team
     if (simulationMode === 'franchise' && f.id === userTeamId) return;
 
     const teamSet = selectedRetentions[f.id];
@@ -1647,14 +1738,12 @@ function autoRetainAllAITeams() {
 
     const former = PLAYERS.filter(p => p.formerTeamId === f.id && p.country !== 'Pakistan');
     
-    // AI retains 1 to 3 of their top former players
     const candidates = [...former].sort((a, b) => b.basePriceLakhs - a.basePriceLakhs);
     const numToRetain = Math.min(candidates.length, Math.floor(Math.random() * 3) + 1); // 1 to 3
     for (let i = 0; i < numToRetain; i++) {
       if (candidates[i]) teamSet.add(candidates[i].id);
     }
 
-    // Refresh Card UI selection classes
     const card = document.getElementById('retention-franchise-grid').children[f.id];
     if (card) {
       card.querySelectorAll('.candidate-row').forEach(row => {
@@ -1672,6 +1761,12 @@ function autoRetainAllAITeams() {
 }
 
 function clearAllRetentions() {
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('clear-all-retentions', { roomId: myPeerId });
+    return;
+  }
+
   franchises.forEach(f => {
     selectedRetentions[f.id].clear();
     const card = document.getElementById('retention-franchise-grid').children[f.id];
@@ -1829,25 +1924,18 @@ function placeManualBid(teamId) {
   if (player.status !== 'available') return;
   const nextBid = getNextBidAmount(currentBidLakhs, player.basePriceLakhs);
   
-  if (isMultiplayer && !isHost) {
-    if (teamId !== userTeamId) return;
-    sendToHost({
-      type: 'PLACE_BID',
-      teamId: teamId,
-      bidAmount: nextBid
-    });
+  if (isMultiplayer) {
+    if (simulationMode === 'franchise' && teamId !== userTeamId) return;
+    const roomId = isHost ? myPeerId : extractRoomIdFromSearch(window.location.search);
+    socket.emit('place-bid', { roomId, teamId, bidAmount: nextBid });
     return;
   }
 
   if (isPaused) {
-    togglePauseTimer(); // resume on bid
+    togglePauseTimer();
   }
 
   executeBid(teamId, nextBid);
-
-  if (isHost) {
-    syncStateToClients();
-  }
 }
 
 function executeBid(teamId, bidAmount) {
@@ -2446,15 +2534,13 @@ function updateTimerUI() {
 // Bidding timer intervals
 function startTimer() {
   clearInterval(timerInterval);
-  if (isMultiplayer && !isHost) return; // Client doesn't run authoritative timer
+  if (isMultiplayer) return; // Server runs multiplayer game timer loop
 
   if (speed === 'instant') {
     resolveActivePlayerInstant();
     return;
   }
 
-  // Normal: 1 second per tick (1000ms)
-  // Fast: 200ms per tick
   const intervalTime = speed === 'fast' ? 200 : 1000;
 
   timerInterval = setInterval(() => {
@@ -2596,11 +2682,9 @@ function openRtmPromptUser() {
 document.getElementById('rtm-decline-btn').onclick = () => {
   rtmPromptModal.classList.remove('active');
   isRtmPhase = false;
-  if (isMultiplayer && !isHost) {
-    sendToHost({
-      type: 'RTM_DECISION',
-      match: false
-    });
+  if (isMultiplayer) {
+    const roomId = isHost ? myPeerId : extractRoomIdFromSearch(window.location.search);
+    socket.emit('rtm-decision', { roomId, teamId: players[activePoolIndex].formerTeamId, match: false });
   } else {
     declareSold(currentHighestBidderId, currentBidLakhs, false);
   }
@@ -2610,11 +2694,9 @@ document.getElementById('rtm-decline-btn').onclick = () => {
 document.getElementById('rtm-confirm-btn').onclick = () => {
   rtmPromptModal.classList.remove('active');
   isRtmPhase = false;
-  if (isMultiplayer && !isHost) {
-    sendToHost({
-      type: 'RTM_DECISION',
-      match: true
-    });
+  if (isMultiplayer) {
+    const roomId = isHost ? myPeerId : extractRoomIdFromSearch(window.location.search);
+    socket.emit('rtm-decision', { roomId, teamId: players[activePoolIndex].formerTeamId, match: true });
   } else {
     declareSold(players[activePoolIndex].formerTeamId, currentBidLakhs, true);
   }
@@ -2811,33 +2893,46 @@ function advanceNextPlayerDelay() {
 
 // Manual trigger controls when autoAdvance is unchecked
 soldPlayerBtn.onclick = () => {
-  if (currentHighestBidderId !== null && players[activePoolIndex].status === 'available') {
-    resolveActivePlayer();
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('sold-player', { roomId: myPeerId });
+  } else {
+    if (currentHighestBidderId !== null && players[activePoolIndex].status === 'available') {
+      resolveActivePlayer();
+    }
   }
 };
 
 unsoldPlayerBtn.onclick = () => {
-  if (players[activePoolIndex].status === 'available') {
-    declareUnsold();
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('unsold-player', { roomId: myPeerId });
+  } else {
+    if (players[activePoolIndex].status === 'available') {
+      declareUnsold();
+    }
   }
 };
 
 // Start retentions confirmations
 confirmRetentionsBtn.onclick = () => {
-  // Lock retentions and assign initial states
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('lock-retentions', { roomId: myPeerId });
+    return;
+  }
+
   franchises.forEach(f => {
     const teamSet = selectedRetentions[f.id] || new Set();
     const retainedIds = Array.from(teamSet);
     const retainedPlayersList = retainedIds.map(id => PLAYERS.find(p => p.id === id));
     
-    // Compute retention stats
     const stats = getRetentionCostAndRtm(retainedPlayersList);
     f.remainingPurseLakhs = 12000 - stats.cost;
     f.rtmCardsLeft = stats.rtm;
 
     const costs = [1600, 1200, 800];
     
-    // Assign sold prices to retained players
     retainedPlayersList.forEach((p, index) => {
       const livePlayerRef = players.find(lp => lp.id === p.id);
       if (livePlayerRef) {
@@ -2850,10 +2945,6 @@ confirmRetentionsBtn.onclick = () => {
   });
 
   phase = 'auction';
-  if (isHost) {
-    syncStateToClients();
-  }
-
   startLiveAuctionPhase();
 };
 
@@ -3606,27 +3697,42 @@ resetRetentionsBtn.onclick = () => clearAllRetentions();
 
 // Live auction controls
 speedNormalBtn.onclick = () => {
-  speed = 'normal';
-  speedNormalBtn.classList.add('active');
-  speedFastBtn.classList.remove('active');
-  speedInstantBtn.classList.remove('active');
-  startTimer();
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('speed-change', { roomId: myPeerId, speed: 'normal' });
+  } else {
+    speed = 'normal';
+    speedNormalBtn.classList.add('active');
+    speedFastBtn.classList.remove('active');
+    speedInstantBtn.classList.remove('active');
+    startTimer();
+  }
 };
 
 speedFastBtn.onclick = () => {
-  speed = 'fast';
-  speedNormalBtn.classList.remove('active');
-  speedFastBtn.classList.add('active');
-  speedInstantBtn.classList.remove('active');
-  startTimer();
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('speed-change', { roomId: myPeerId, speed: 'fast' });
+  } else {
+    speed = 'fast';
+    speedNormalBtn.classList.remove('active');
+    speedFastBtn.classList.add('active');
+    speedInstantBtn.classList.remove('active');
+    startTimer();
+  }
 };
 
 speedInstantBtn.onclick = () => {
-  speed = 'instant';
-  speedNormalBtn.classList.remove('active');
-  speedFastBtn.classList.remove('active');
-  speedInstantBtn.classList.add('active');
-  startTimer();
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('speed-change', { roomId: myPeerId, speed: 'instant' });
+  } else {
+    speed = 'instant';
+    speedNormalBtn.classList.remove('active');
+    speedFastBtn.classList.remove('active');
+    speedInstantBtn.classList.add('active');
+    startTimer();
+  }
 };
 
 function togglePauseTimer() {
@@ -3641,10 +3747,22 @@ function togglePauseTimer() {
     logActivity('bid', 'Bidding resumed');
   }
 }
-pauseTimerBtn.onclick = () => togglePauseTimer();
+pauseTimerBtn.onclick = () => {
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('pause-toggle', { roomId: myPeerId });
+  } else {
+    togglePauseTimer();
+  }
+};
 
 autoAdvanceCheck.onchange = (e) => {
-  autoAdvance = e.target.checked;
+  if (isMultiplayer) {
+    if (!isHost) return;
+    socket.emit('auto-advance-toggle', { roomId: myPeerId, autoAdvance: e.target.checked });
+  } else {
+    autoAdvance = e.target.checked;
+  }
 };
 
 // Configurable Timer selectors syncing
@@ -3676,8 +3794,13 @@ bidRaiseBtn.onclick = () => {
 
 resetAuctionBtn.onclick = () => {
   if (confirm("Are you sure you want to reset the simulator? All data will be lost.")) {
-    clearInterval(timerInterval);
-    initApp();
+    if (isMultiplayer) {
+      if (!isHost) return;
+      socket.emit('reset-room', { roomId: myPeerId });
+    } else {
+      clearInterval(timerInterval);
+      initApp();
+    }
   }
 };
 
@@ -3693,6 +3816,7 @@ createRoomBtn.onclick = () => {
   // We instantly generate the roomId locally
   const localRoomId = 'room_' + Math.floor(100000 + Math.random() * 900000);
   myPeerId = localRoomId;
+  activeRoomId = localRoomId; // FIX #1: Set stable room ID — survives socket reconnects
 
   // Set the privacy and pin
   const privacyVal = document.querySelector('input[name="room-privacy"]:checked').value;
@@ -3777,6 +3901,10 @@ startMultiplayerBtn.onclick = () => {
       me.teamId = userTeamId;
       me.name = (welcomeNameInput.value.trim() || 'Host') + " (Host)";
     }
+    // FIX #4/#5: Notify server that retention phase has started
+    // This ensures reconnecting guests get correct phase from server, not stale 'setup'
+    const roomIdForRetention = activeRoomId || myPeerId;
+    socket.emit('start-retention', { roomId: roomIdForRetention });
     syncStateToClients();
   }
 
